@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
+import { useEffect, useRef, useCallback, useState } from 'react'
 import { GameEngine } from '../models/GameEngine'
 import type { GameModeConfig } from '../models/GameEngine'
 import { allSkills } from '../models/skills'
@@ -11,7 +11,7 @@ import {
   computeIceSpikeSnapshot,
   computeFireballSnapshot,
   computeBeamSnapshot,
-  rarityColors,
+  rarityHexColors,
   rarityNames,
 } from '../models/cards'
 import type { CardDefinition } from '../models/cards'
@@ -468,8 +468,8 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                       {slot.cards.map((c, j) => (
                         <span key={j} style={{
                           fontSize: 10, padding: '1px 4px', borderRadius: 3,
-                          background: rarityColors[c.rarity] + '33',
-                          color: rarityColors[c.rarity],
+                          background: rarityHexColors[c.rarity] + '33',
+                          color: rarityHexColors[c.rarity],
                         }}>{c.name}</span>
                       ))}
                     </div>
@@ -511,12 +511,12 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
               onClick={() => onPick(card)}
               style={{
                 width: 200, padding: 16, borderRadius: 12, cursor: 'pointer',
-                background: '#2a2a3e', border: `2px solid ${rarityColors[card.rarity]}`,
+                background: '#2a2a3e', border: `2px solid ${rarityHexColors[card.rarity]}`,
                 transition: 'transform 0.15s, box-shadow 0.15s',
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = 'translateY(-4px)'
-                e.currentTarget.style.boxShadow = `0 8px 24px ${rarityColors[card.rarity]}44`
+                e.currentTarget.style.boxShadow = `0 8px 24px ${rarityHexColors[card.rarity]}44`
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.style.transform = ''
@@ -524,7 +524,7 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: rarityColors[card.rarity], fontWeight: 'bold' }}>
+                <span style={{ fontSize: 11, color: rarityHexColors[card.rarity], fontWeight: 'bold' }}>
                   {rarityNames[card.rarity]}
                 </span>
                 {isNewSkill && (

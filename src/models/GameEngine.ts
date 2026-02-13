@@ -586,8 +586,8 @@ export class GameEngine {
     const snapshot = this.iceSpikeSnapshot
     if (!snapshot) return
 
-    const { player, enemies } = this.state
-    const { arcAngle, castRange, pillarCount, damage, hasSpread, isCage, isMine, spreadIsMine, hasPermafrost, hasResonance } = snapshot
+    const { player } = this.state
+    const { arcAngle, castRange, pillarCount, damage, hasSpread, isCage, isMine, spreadIsMine, hasResonance } = snapshot
 
     const target = this.findNearestEnemy(player.position)
     let baseAngle = 0
@@ -1401,7 +1401,7 @@ export class GameEngine {
 
   /** 計算折射子光束段（從 startEnemy 向 200px 內最近敵人折射，最多 2 次） */
   private computeRefractionSegments(
-    startEnemy: Entity, range: number, width: number, refrDps: number,
+    startEnemy: Entity, _range: number, width: number, refrDps: number,
   ): BeamSegment[] {
     const segments: BeamSegment[] = []
     let currentPos = startEnemy.position

@@ -13,7 +13,6 @@ import {
   rarityColors,
   rarityNames,
 } from '../models/cards'
-import type { GameState } from '../models/GameEngine'
 import type { CardDefinition, ArrowInstance, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from '../models/cards'
 import { drawGame } from '../rendering/drawFunctions'
 

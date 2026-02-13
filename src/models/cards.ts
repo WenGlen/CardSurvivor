@@ -769,11 +769,18 @@ export function computeBeamSnapshot(cardSequence: CardDefinition[]): BeamSnapsho
   return snapshot
 }
 
-/** 稀有度顯示配色 */
+/** 稀有度顯示配色（Tailwind 類名，用於 className） */
 export const rarityColors: Record<CardRarity, { border: string; bg: string; text: string }> = {
   bronze: { border: 'border-amber-600', bg: 'bg-amber-900/30', text: 'text-amber-400' },
   silver: { border: 'border-slate-300', bg: 'bg-slate-700/30', text: 'text-slate-300' },
   gold: { border: 'border-yellow-400', bg: 'bg-yellow-900/30', text: 'text-yellow-400' },
+}
+
+/** 稀有度內聯樣式用色（hex，用於 style={{ color }}) */
+export const rarityHexColors: Record<CardRarity, string> = {
+  bronze: '#d97706',
+  silver: '#cbd5e1',
+  gold: '#facc15',
 }
 
 /** 稀有度中文名 */
