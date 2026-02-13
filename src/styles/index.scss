@@ -1,0 +1,22 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body {
+    height: 100%;
+  }
+
+  .font-poppins {
+    font-family: "Poppins", sans-serif;
+  }
+
+  .font-yellowtail {
+    font-family: "Yellowtail", cursive;
+  }
+
+  .font-caveat {
+    font-family: "Caveat", cursive;
+  }
+}
+
