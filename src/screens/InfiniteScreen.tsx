@@ -1,4 +1,6 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import MobileTouchControls from '../components/MobileTouchControls'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { GameEngine } from '../models/GameEngine'
 import type { GameModeConfig } from '../models/GameEngine'
 import { allSkills } from '../models/skills'
@@ -38,8 +40,25 @@ import {
 } from '../models/InfiniteGameLogic'
 import type { InfiniteGameState, GamePhase, BestRecord } from '../models/InfiniteGameLogic'
 
-const CANVAS_WIDTH = 800
-const CANVAS_HEIGHT = 600
+/**
+ * 無限模式：地圖邊界（直式 4:3 = 寬:高 = 3:4）
+ * - 主角可移動範圍限制在此邊界內，與畫面上固定直式 4:3 外框一致。
+ * - 之後若要改為「靠近邊界才阻擋」或調整可移動範圍，只需改這裡或由這裡推 playerBounds。
+ */
+const INFINITE_MAP = {
+  /** 寬:高 = 3:4（直式） */
+  aspectRatio: 3 / 4,
+  /** 邏輯寬度（短邊），高度 = width / aspectRatio */
+  width: 600,
+} as const
+const INFINITE_MAP_HEIGHT = Math.round(INFINITE_MAP.width / INFINITE_MAP.aspectRatio) // 800
+
+/** Canvas 邏輯尺寸 = 地圖邊界（直式 4:3） */
+const CANVAS_WIDTH = INFINITE_MAP.width
+const CANVAS_HEIGHT = INFINITE_MAP_HEIGHT
+
+/** 畫面上外框的 CSS 長寬比（直式 4:3），與地圖一致 */
+const MAP_ASPECT_RATIO = '3 / 4'
 
 /** 所有卡片合集 */
 const allCards: CardDefinition[] = [
@@ -79,12 +98,16 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
   const engineRef = useRef<GameEngine | null>(null)
   const gsRef = useRef<InfiniteGameState>(createInfiniteState())
   const spawnTimerRef = useRef(0)
+  /** 卡槽捲動容器 ref，用於新卡加入時自動捲到底部 */
+  const slotScrollRefs = useRef<(HTMLDivElement | null)[]>([])
+  const prevSlotLengths = useRef<number[]>([0, 0, 0])
 
   const [phase, setPhase] = useState<GamePhase>('INITIAL_PICK')
   const [cardOffer, setCardOffer] = useState<CardDefinition[]>([])
   const [, forceRender] = useState(0)
   const [gameOverState, setGameOverState] = useState<{ gs: InfiniteGameState; best: BestRecord | null } | null>(null)
   const [paused, setPaused] = useState(false)
+  const isMobile = useIsMobile()
 
   const triggerRender = useCallback(() => {
     forceRender((n) => n + 1)
@@ -147,6 +170,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
       enableMapPickups: true,
       resolvePickupTarget,
       onPickupCollected,
+      ...(isMobile && { enemySpeedMultiplier: 0.7 }),
     }
 
     const engine = new GameEngine(CANVAS_WIDTH, CANVAS_HEIGHT, triggerRender, modeConfig)
@@ -161,6 +185,27 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
 
     return () => engine.stop()
   }, [triggerRender, onEnemyKilled, onPickupCollected, resolvePickupTarget])
+
+  /** 手機模式切換時更新引擎（敵人速度） */
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine) return
+    engine.updateModeConfig({ enemySpeedMultiplier: isMobile ? 0.7 : 1 })
+  }, [isMobile])
+
+  /** 新卡加入時，該卡槽自動捲到底部（顯示最新）；使用者可往回滑看舊卡 */
+  useLayoutEffect(() => {
+    const gs = gsRef.current
+    for (let i = 0; i < 3; i++) {
+      const len = gs.slots[i]?.items.length ?? 0
+      const prev = prevSlotLengths.current[i] ?? 0
+      prevSlotLengths.current[i] = len
+      if (len > prev) {
+        const el = slotScrollRefs.current[i]
+        if (el) el.scrollTop = el.scrollHeight
+      }
+    }
+  })
 
   /** 暫停/繼續切換 */
   const togglePause = useCallback(() => {
@@ -271,6 +316,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
           killStreak: gs.score.killStreak,
           survivalTime: gs.score.survivalTime,
           invincibleUntil: engine.state.invincibleUntil,
+          hideHudOverlay: isMobile,
         }
       : undefined
 
@@ -348,12 +394,243 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
 
   const gs = gsRef.current
 
+  // 手機版專用排版（圖 B）：上地圖（全寬 3:4）、下為卡槽(左2/3) + 搖桿(右1/3)
+  if (isMobile) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: '100dvh',
+        overflow: 'hidden', fontFamily: 'monospace', color: '#e0e0e0',
+        background: '#0d0d1a',
+      }}>
+        {/* 頂部：返回 + Card Survivor + 無限模式 */}
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8,
+          padding: '8px 12px', borderBottom: '1px solid #333', background: '#0d0d1a',
+        }}>
+          <button onClick={onExit} style={{ ...btnStyle, padding: '6px 12px', fontSize: 12 }}>← 返回</button>
+          <span style={{ fontSize: 14, color: '#aaa' }}>Card Survivor</span>
+          <span style={{ fontSize: 14, fontWeight: 'bold' }}>無限模式</span>
+        </div>
+
+        {/* 血量、分數、關卡、擊殺進度（戰鬥時顯示，條狀＋數值） */}
+        {(phase === 'BATTLE' || phase === 'CARD_PICK') && (
+          <div style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12,
+            padding: '6px 12px', fontSize: 10, background: '#15152a',
+            borderBottom: '1px solid #2a2a3e', flexWrap: 'wrap',
+          }}>
+            {/* HP 條 + 數值 */}
+            <div style={{ flex: '1 1 100px', minWidth: 80 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                <span style={{ color: '#66BB6A' }}>HP</span>
+                <span style={{ color: '#66BB6A' }}>{gs.playerHp}/{gs.playerMaxHp}</span>
+              </div>
+              <div style={{ height: 6, background: 'rgba(0,0,0,0.5)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.max(0, (gs.playerHp / gs.playerMaxHp) * 100)}%`,
+                  height: '100%',
+                  background: (gs.playerHp / gs.playerMaxHp) < 0.3 ? '#EF5350' : '#66BB6A',
+                  borderRadius: 3,
+                }} />
+              </div>
+            </div>
+            {/* 擊殺條 + 數值 */}
+            <div style={{ flex: '1 1 100px', minWidth: 80 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                <span>擊殺</span>
+                <span style={{ color: '#4FC3F7' }}>{gs.wave.killCount}/{gs.wave.killTarget}</span>
+              </div>
+              <div style={{ height: 6, background: 'rgba(0,0,0,0.5)', borderRadius: 3, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.min(100, (gs.wave.killCount / Math.max(1, gs.wave.killTarget)) * 100)}%`,
+                  height: '100%',
+                  background: '#4FC3F7',
+                  borderRadius: 3,
+                }} />
+              </div>
+            </div>
+            {/* 分數、Wave */}
+            <span style={{ color: '#FFD54F', alignSelf: 'center' }}>分數: {gs.score.score.toLocaleString()}</span>
+            <span style={{ alignSelf: 'center' }}>Wave {gs.wave.waveNumber}</span>
+          </div>
+        )}
+
+        {/* 地圖區：全寬、直式 4:3，不預留自適應空間，外框貼齊地圖邊界 */}
+        <div style={{
+          flexShrink: 0,
+          width: '100%',
+          aspectRatio: MAP_ASPECT_RATIO,
+          background: '#0d0d1a',
+          border: '2px solid #333',
+          boxSizing: 'border-box',
+        }}>
+          <div style={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+          }}>
+            <canvas
+              ref={canvasRef}
+              width={CANVAS_WIDTH}
+              height={CANVAS_HEIGHT}
+              style={{
+                width: '100%', height: '100%',
+                objectFit: 'contain',
+              }}
+            />
+            {phase === 'INITIAL_PICK' && (
+              <CardPickOverlay title="選擇起始技能" subtitle="選擇一張銅卡開始冒險" cards={cardOffer} onPick={handlePickCard} slots={gs.slots} />
+            )}
+            {phase === 'CARD_PICK' && (
+              <CardPickOverlay title={`Wave ${gs.wave.waveNumber} — 選擇強化`} subtitle={`擊殺 ${gs.wave.killTarget} 隻`} cards={cardOffer} onPick={handlePickCard} slots={gs.slots} />
+            )}
+            {paused && (
+              <div style={overlayStyle}>
+                <div style={{ fontSize: 24, fontWeight: 'bold', marginBottom: 12 }}>⏸ 暫停</div>
+                <button onClick={togglePause} style={{ ...btnStyle, background: '#4CAF50', padding: '10px 20px' }}>繼續</button>
+              </div>
+            )}
+            {phase === 'GAME_OVER' && gameOverState && (
+              <GameOverOverlay gs={gameOverState.gs} best={gameOverState.best} onRestart={handleRestart} onExit={onExit} />
+            )}
+          </div>
+        </div>
+
+        {/* 底部：卡槽 + 操作區撐滿剩餘空間 */}
+        {(phase === 'BATTLE' || phase === 'CARD_PICK') && (
+          <div style={{
+            flex: 1, minHeight: 0, display: 'flex', padding: 6, gap: 8,
+            background: '#0d0d1a',
+          }}>
+            {/* 左 2/3：卡槽，三格並排 */}
+            <div style={{
+              flex: 2, minWidth: 0, display: 'grid',
+              gridTemplateColumns: '1fr 1fr 1fr', gap: 6,
+              overflow: 'hidden',
+            }}>
+              {gs.slots.map((slot, i) => {
+                const engine = engineRef.current
+                const skill = slot.skillId ? allSkills.find(s => s.id === slot.skillId) : null
+                const remaining = (slot.skillId && engine) ? (engine.state.skillCooldowns.get(slot.skillId) ?? 0) : 0
+                const total = (slot.skillId && skill && engine) ? engine.getCooldownForSkill(slot.skillId, skill) : 1
+                const ratio = Math.max(0, Math.min(1, remaining / total))
+                const isReady = remaining <= 0 && !!slot.skillId
+                const pct = Math.round((1 - ratio) * 360)
+                return (
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0 }}>
+                    {/* 摘要在上，倒計時於摘要外框（外層 conic 當邊框） */}
+                    <div style={{
+                      flexShrink: 0, padding: 2, borderRadius: 6,
+                      background: (slot.skillId && !isReady)
+                        ? `conic-gradient(#FFB74D ${pct}deg, #333 ${pct}deg)`
+                        : (isReady && slot.skillId ? '#4CAF50' : '#333'),
+                    }}>
+                      <div style={{
+                        padding: 4, background: '#15152a', borderRadius: 4,
+                        fontSize: 8, fontFamily: 'monospace', color: '#aaa', lineHeight: 1.3,
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+                          {slot.skillId && <span style={{ fontSize: 12 }}>{getSkillIcon(slot.skillId)}</span>}
+                          <span style={{ fontWeight: 'bold', color: '#ccc' }}>{slot.skillId ? (skill?.name ?? slot.skillId) : `卡槽 ${i + 1}`}</span>
+                          {slot.skillId && (
+                            <span style={{ marginLeft: 'auto', color: isReady ? '#4CAF50' : '#FFB74D', fontWeight: 'bold' }}>
+                              {isReady ? 'OK' : remaining.toFixed(1) + 's'}
+                            </span>
+                          )}
+                        </div>
+                        {slot.skillId && getSlotStatusLines(slot.skillId, slot.items).map((line, k) => (
+                          <div key={k}>{line}</div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* 卡在下：每張都顯示標題，新卡自動推到底部，可往回滑看舊卡 */}
+                    <div
+                      ref={(el) => { if (el) slotScrollRefs.current[i] = el }}
+                      style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+                    >
+                      {slot.items.length > 0 ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          {slot.items.map((item, j) => {
+                            if (item.kind === 'card') {
+                              const c = item.card
+                              return (
+                                <div key={'c-' + j} style={{
+                                  padding: 4, borderRadius: 4,
+                                  background: `linear-gradient(to bottom, ${rarityHexColors[c.rarity]}28, ${rarityHexColors[c.rarity]}10)`,
+                                  border: `1px solid ${rarityHexColors[c.rarity]}55`,
+                                  fontSize: 9, fontWeight: 'bold', color: rarityHexColors[c.rarity],
+                                }}>
+                                  {c.name}
+                                </div>
+                              )
+                            }
+                            const b = item.buff
+                            const buffColors = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D' }
+                            return (
+                              <div key={'b-' + j} style={{
+                                padding: 4, borderRadius: 4,
+                                background: `linear-gradient(to bottom, ${buffColors[b.type]}28, ${buffColors[b.type]}10)`,
+                                border: `1px solid ${buffColors[b.type]}55`,
+                                fontSize: 9, fontWeight: 'bold', color: buffColors[b.type],
+                              }}>
+                                {b.label}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <div style={{ padding: 6, fontSize: 9, color: '#555', textAlign: 'center' }}>空</div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* 右 1/3：搖桿置中 + 暫停最下 */}
+            <div style={{
+              flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+              gap: 8, justifyContent: 'space-between',
+            }}>
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <MobileTouchControls
+                  onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
+                  onEnd={() => engineRef.current?.setMoveInput(null, null)}
+                  size={90}
+                  placement="center"
+                />
+              </div>
+              <button
+                onClick={togglePause}
+                style={{ ...btnStyle, padding: '10px 20px', fontSize: 12, flexShrink: 0 }}
+              >
+                {paused ? '▶ 繼續' : '⏸ 暫停'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 桌機版排版
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 16, fontFamily: 'monospace', color: '#e0e0e0' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: '100dvh',
+      overflow: 'hidden', fontFamily: 'monospace', color: '#e0e0e0',
+    }}>
       {/* 頂部資訊列 */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 24 }}>
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', gap: 'clamp(8px, 2vw, 24px)',
+        padding: 'clamp(6px, 1.5vw, 12px) clamp(8px, 2vw, 16px)',
+        fontSize: 'clamp(11px, 2vw, 14px)', flexWrap: 'wrap',
+      }}>
         <button onClick={onExit} style={btnStyle}>← 返回</button>
-        <span style={{ fontSize: 18, fontWeight: 'bold' }}>無限模式</span>
+        <span style={{ fontWeight: 'bold' }}>無限模式</span>
         {(gs.phase === 'BATTLE' || paused) && (
           <>
             <span>Wave {gs.wave.waveNumber} | 分數 {gs.score.score} | 擊殺 {gs.wave.killCount}/{gs.wave.killTarget}</span>
@@ -364,14 +641,34 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
         )}
       </div>
 
-      {/* Canvas */}
-      <div style={{ position: 'relative' }}>
-        <canvas
-          ref={canvasRef}
-          width={CANVAS_WIDTH}
-          height={CANVAS_HEIGHT}
-          style={{ border: '2px solid #333', borderRadius: 8, display: 'block' }}
-        />
+      {/* Canvas 區域：固定直式 4:3，與手機版一致 */}
+      <div style={{
+        flex: 1, minHeight: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '0 clamp(4px, 1vw, 12px)',
+      }}>
+        <div style={{
+          position: 'relative',
+          width: '100%',
+          height: '100%',
+          maxWidth: '100%',
+          maxHeight: '100%',
+          aspectRatio: MAP_ASPECT_RATIO,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+          borderRadius: 8,
+          border: '2px solid #333',
+        }}>
+          <canvas
+            ref={canvasRef}
+            width={CANVAS_WIDTH}
+            height={CANVAS_HEIGHT}
+            style={{
+              width: '100%', height: '100%',
+              objectFit: 'contain',
+            }}
+          />
 
         {/* INITIAL_PICK overlay */}
         {phase === 'INITIAL_PICK' && (
@@ -420,11 +717,25 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
             onExit={onExit}
           />
         )}
+
+        {/* 手機版虛擬搖桿 */}
+        {isMobile && (phase === 'BATTLE' || phase === 'CARD_PICK') && !paused && (
+          <MobileTouchControls
+            onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
+            onEnd={() => engineRef.current?.setMoveInput(null, null)}
+            size={90}
+          />
+        )}
+        </div>
       </div>
 
       {/* 底部卡槽預覽（疊卡樣式）+ 冷卻倒數；狀態摘要置於卡槽右側 */}
       {(phase === 'BATTLE' || phase === 'CARD_PICK') && (
-        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+        <div style={{
+          flexShrink: 0, display: 'flex', gap: 'clamp(8px, 2vw, 32px)', flexWrap: 'wrap',
+          justifyContent: 'center', padding: 'clamp(6px, 1.5vw, 12px)',
+          maxHeight: 'clamp(120px, 25vh, 200px)', overflow: 'hidden',
+        }}>
           {gs.slots.map((slot, i) => {
             const engine = engineRef.current
             const skill = slot.skillId ? allSkills.find(s => s.id === slot.skillId) : null
@@ -442,9 +753,12 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
               : undefined
 
             return (
-              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flex: '1 1 auto', minWidth: isMobile ? 0 : undefined }}>
                 <div style={{
-                  width: 220, minHeight: 100, position: 'relative',
+                  width: isMobile ? 'min(120px, 28vw)' : 220,
+                  minWidth: isMobile ? 90 : 220,
+                  minHeight: isMobile ? 72 : 100,
+                  position: 'relative',
                   padding: 4, borderRadius: 10,
                   background: borderImg ?? borderColor,
                 }}>
@@ -455,10 +769,10 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                   }}>
                   {/* 技能名稱 + 冷卻 */}
                   <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px',
+                    display: 'flex', alignItems: 'center', gap: 4, padding: isMobile ? '4px 6px' : '6px 8px',
                     borderBottom: slot.items.length > 0 ? '1px solid #333' : undefined,
                   }}>
-                    <div style={{ fontSize: 12, fontWeight: 'bold', flex: 1, color: '#ccc', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <div style={{ fontSize: isMobile ? 10 : 12, fontWeight: 'bold', flex: 1, color: '#ccc', display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                       {slot.skillId && <span style={{ fontSize: 14 }}>{getSkillIcon(slot.skillId)}</span>}
                       {slot.skillId ? (skill?.name ?? slot.skillId) : `卡槽 ${i + 1}`}
                     </div>
@@ -472,12 +786,16 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                     )}
                   </div>
 
-                  {/* 疊卡：一般卡片 + 強化碎片卡，標題在上，最上一張多顯示說明 */}
+                  {/* 疊卡：每張都顯示標題，新卡自動推到底部，可往回滑看舊卡 */}
                   {slot.items.length > 0 ? (
-                    <div style={{
-                      padding: 6, position: 'relative',
-                      display: 'flex', flexDirection: 'column', gap: 0,
-                    }}>
+                    <div
+                      ref={(el) => { if (el) slotScrollRefs.current[i] = el }}
+                      style={{
+                        padding: 6, position: 'relative',
+                        display: 'flex', flexDirection: 'column', gap: 0,
+                        overflow: 'auto', maxHeight: 'clamp(120px, 25vh, 200px)',
+                      }}
+                    >
                       {slot.items.map((item, j) => {
                         const isTop = j === slot.items.length - 1
                         if (item.kind === 'card') {
@@ -542,11 +860,11 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
               {/* 技能狀態摘要：置於卡槽右側，冷卻/範圍＋效果標籤 */}
               {slot.skillId && (
                 <div style={{
-                  minWidth: 140, padding: '6px 10px 8px',
+                  minWidth: isMobile ? 0 : 140, width: isMobile ? 90 : undefined, padding: isMobile ? '4px 6px' : '6px 10px 8px',
                   background: '#15152a',
                   borderRadius: 6,
                   border: '1px solid #333',
-                  fontSize: 10,
+                  fontSize: isMobile ? 8 : 10,
                   fontFamily: 'monospace',
                   color: '#aaa',
                   lineHeight: 1.4,
@@ -577,10 +895,10 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
 }) {
   return (
     <div style={overlayStyle}>
-      <div style={{ fontSize: 22, fontWeight: 'bold', marginBottom: 4 }}>{title}</div>
-      <div style={{ fontSize: 13, color: '#aaa', marginBottom: 16 }}>{subtitle}</div>
+      <div style={{ fontSize: 'clamp(16px, 4vw, 22px)', fontWeight: 'bold', marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 'clamp(11px, 2.5vw, 13px)', color: '#aaa', marginBottom: 16 }}>{subtitle}</div>
 
-      <div style={{ display: 'flex', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 'clamp(8px, 2vw, 16px)', flexWrap: 'wrap', justifyContent: 'center' }}>
         {cards.map((card) => {
           const skill = allSkills.find(s => s.id === card.skillId)
           const existingSlot = slots.find(s => s.skillId === card.skillId)
@@ -591,7 +909,7 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
               key={card.id}
               onClick={() => onPick(card)}
               style={{
-                width: 200, padding: 16, borderRadius: 12, cursor: 'pointer',
+                width: 'min(200px, 70vw)', padding: 'clamp(10px, 2vw, 16px)', borderRadius: 12, cursor: 'pointer',
                 background: '#2a2a3e', border: `2px solid ${rarityHexColors[card.rarity]}`,
                 transition: 'transform 0.15s, box-shadow 0.15s',
               }}
@@ -612,12 +930,12 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
                   <span style={{ fontSize: 10, color: '#4CAF50', fontWeight: 'bold' }}>新技能</span>
                 )}
               </div>
-              <div style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 6 }}>{card.name}</div>
-              <div style={{ fontSize: 11, color: '#aaa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+              <div style={{ fontSize: 'clamp(14px, 3vw, 16px)', fontWeight: 'bold', marginBottom: 6 }}>{card.name}</div>
+              <div style={{ fontSize: 'clamp(10px, 2vw, 11px)', color: '#aaa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
                 <span>{getSkillIcon(card.skillId)}</span>
                 {skill?.name ?? card.skillId}
               </div>
-              <div style={{ fontSize: 12, color: '#ccc', lineHeight: 1.4 }}>{card.description}</div>
+              <div style={{ fontSize: 'clamp(10px, 2vw, 12px)', color: '#ccc', lineHeight: 1.4 }}>{card.description}</div>
             </div>
           )
         })}
@@ -638,12 +956,12 @@ function GameOverOverlay({ gs, best, onRestart, onExit }: {
 
   return (
     <div style={overlayStyle}>
-      <div style={{ fontSize: 36, fontWeight: 'bold', color: '#EF5350', marginBottom: 12 }}>
+      <div style={{ fontSize: 'clamp(24px, 6vw, 36px)', fontWeight: 'bold', color: '#EF5350', marginBottom: 12 }}>
         GAME OVER
       </div>
 
       <div style={{
-        background: '#1a1a2e', borderRadius: 12, padding: 20, width: 320,
+        background: '#1a1a2e', borderRadius: 12, padding: 20, width: 'min(320px, 90vw)',
         border: '1px solid #444',
       }}>
         <div style={{ fontSize: 24, fontWeight: 'bold', textAlign: 'center', marginBottom: 16 }}>

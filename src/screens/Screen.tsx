@@ -28,25 +28,38 @@ function ModeSelectScreen({ onSelect }: { onSelect: (screen: ScreenName) => void
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      height: '100vh', gap: 24, fontFamily: 'monospace', color: '#e0e0e0',
-      background: '#0d0d1a',
+      width: '100%', height: '100%', minHeight: '100dvh', gap: 'clamp(12px, 3vh, 24px)',
+      fontFamily: 'monospace', color: '#e0e0e0', background: '#0d0d1a',
+      padding: 'clamp(8px, 2vw, 24px)', overflow: 'hidden',
     }}>
-      <div style={{ fontSize: 36, fontWeight: 'bold', marginBottom: 8 }}>Card Survivor</div>
-      <div style={{ fontSize: 14, color: '#888', marginBottom: 24 }}>選擇遊戲模式</div>
+      <img
+        src="/CardSurvivor-mark.png"
+        alt="Card Survivor"
+        style={{
+          maxWidth: 'min(280px, 85vw)',
+          height: 'auto',
+          objectFit: 'contain',
+          marginBottom: 'clamp(4px, 1vh, 12px)',
+        }}
+      />
+      <div style={{ fontSize: 'clamp(12px, 2.5vw, 14px)', color: '#888', marginBottom: 'clamp(8px, 2vh, 24px)' }}>
+        選擇遊戲模式
+      </div>
 
       <button
         onClick={() => onSelect('infinite')}
         style={{
-          width: 280, padding: '16px 24px', borderRadius: 12, cursor: 'pointer',
+          width: 'min(280px, 90vw)', padding: 'clamp(12px, 2.5vw, 16px) clamp(20px, 4vw, 24px)',
+          borderRadius: 12, cursor: 'pointer',
           background: '#2a2a3e', border: '2px solid #4CAF50', color: '#fff',
-          fontSize: 18, fontWeight: 'bold', fontFamily: 'monospace',
+          fontSize: 'clamp(14px, 3vw, 18px)', fontWeight: 'bold', fontFamily: 'monospace',
           transition: 'transform 0.15s',
         }}
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.03)' }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = '' }}
       >
         <div>無限模式</div>
-        <div style={{ fontSize: 12, color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
+        <div style={{ fontSize: 'clamp(10px, 2vw, 12px)', color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
           波次挑戰 · 抽卡強化 · 挑戰最高分
         </div>
       </button>
@@ -54,16 +67,17 @@ function ModeSelectScreen({ onSelect }: { onSelect: (screen: ScreenName) => void
       <button
         onClick={() => onSelect('practice')}
         style={{
-          width: 280, padding: '16px 24px', borderRadius: 12, cursor: 'pointer',
+          width: 'min(280px, 90vw)', padding: 'clamp(12px, 2.5vw, 16px) clamp(20px, 4vw, 24px)',
+          borderRadius: 12, cursor: 'pointer',
           background: '#2a2a3e', border: '2px solid #555', color: '#fff',
-          fontSize: 18, fontWeight: 'bold', fontFamily: 'monospace',
+          fontSize: 'clamp(14px, 3vw, 18px)', fontWeight: 'bold', fontFamily: 'monospace',
           transition: 'transform 0.15s',
         }}
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.03)' }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = '' }}
       >
         <div>練習場</div>
-        <div style={{ fontSize: 12, color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
+        <div style={{ fontSize: 'clamp(10px, 2vw, 12px)', color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
           自由配卡 · 測試技能組合
         </div>
       </button>

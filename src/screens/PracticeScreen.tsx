@@ -1,4 +1,6 @@
 import { useEffect, useRef, useCallback, useState, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
+import MobileTouchControls from '../components/MobileTouchControls'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { GameEngine } from '../models/GameEngine'
 import { allSkills } from '../models/skills'
 import {
@@ -33,6 +35,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   const [enemyHp, setEnemyHp] = useState(9999)
   const [paused, setPaused] = useState(false)
   const [, forceRender] = useState(0)
+  const isMobile = useIsMobile()
 
   const triggerRender = useCallback(() => {
     forceRender((n) => n + 1)
@@ -218,24 +221,31 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   }
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white select-none">
+    <div className="flex flex-col md:flex-row h-[100dvh] min-h-0 overflow-hidden bg-gray-900 text-white select-none">
       {/* 左側：遊戲區域 + 數值面板 */}
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 p-4 overflow-y-auto">
+      <div className="flex-1 flex flex-col items-center justify-center gap-2 md:gap-3 p-2 md:p-4 min-h-0 overflow-hidden">
         {/* Canvas */}
-        <div className="relative shrink-0">
+        <div className="relative shrink-0 max-w-full max-h-[50vh] md:max-h-none flex items-center justify-center">
           <canvas
             ref={canvasRef}
             width={CANVAS_WIDTH}
             height={CANVAS_HEIGHT}
-            className="rounded-lg border border-gray-700"
+            className="rounded-lg border border-gray-700 max-w-full max-h-full object-contain"
             onMouseDown={handleCanvasMouseDown}
             onMouseMove={handleCanvasMouseMove}
             onMouseUp={handleCanvasMouseUp}
             onMouseLeave={handleCanvasMouseLeave}
           />
-          <div className="absolute bottom-2 left-2 text-xs text-gray-500">
-            WASD 移動 · 拖曳木樁可移動位置
+          <div className="absolute bottom-2 left-2 text-[10px] md:text-xs text-gray-500">
+            {isMobile ? '虛擬搖桿移動 · ' : 'WASD 移動 · '}拖曳木樁可移動位置
           </div>
+          {isMobile && (
+            <MobileTouchControls
+              onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
+              onEnd={() => engineRef.current?.setMoveInput(null, null)}
+              size={90}
+            />
+          )}
           <div className="absolute top-2 left-2 flex gap-2">
             {onExit && (
               <button
@@ -317,7 +327,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
       </div>
 
       {/* 右側：卡片專區 */}
-      <div className="w-72 bg-gray-800 border-l border-gray-700 flex flex-col overflow-hidden">
+      <div className="w-full md:w-72 bg-gray-800 border-t md:border-t-0 md:border-l border-gray-700 flex flex-col overflow-hidden min-h-0 max-h-[50vh] md:max-h-none flex-1 md:flex-initial">
         {/* 技能切換 Tab */}
         <div className="flex border-b border-gray-700">
           {([

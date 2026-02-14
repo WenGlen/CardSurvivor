@@ -33,6 +33,10 @@ export interface GameModeConfig {
   resolvePickupTarget?: (type: 'cooldown' | 'range' | 'count') => number | null
   /** 拾取碎片時回呼（targetSlotIndex 為生成時指定的卡槽） */
   onPickupCollected?: (type: 'cooldown' | 'range' | 'count', targetSlotIndex: number) => void
+  /** 敵人速度倍率（手機版可設 0.7 降低難度） */
+  enemySpeedMultiplier?: number
+  /** 主角移動邊界（手機 object-fit cover 時依可見範圍限制） */
+  playerBounds?: { minX: number; maxX: number; minY: number; maxY: number }
 }
 
 /** 遊戲引擎狀態 */
@@ -55,6 +59,8 @@ export interface GameState {
   activeSkillId: string | null
   skillCooldowns: Map<string, number>
   keysPressed: Set<string>
+  /** 觸控／搖桿輸入（優先於 keysPressed），-1~1 正規化方向 */
+  moveInput: { dx: number; dy: number } | null
   canvasWidth: number
   canvasHeight: number
   /** 玩家無敵結束時間戳（ms） */
@@ -139,6 +145,7 @@ export class GameEngine {
       activeSkillId: null,
       skillCooldowns: new Map(),
       keysPressed: new Set(),
+      moveInput: null,
       canvasWidth,
       canvasHeight,
       invincibleUntil: 0,
@@ -354,6 +361,17 @@ export class GameEngine {
 
   setCooldownMultiplier(m: number) { this.cooldownMultiplier = Math.max(COOLDOWN_MULTIPLIER_BOUNDS.min, Math.min(COOLDOWN_MULTIPLIER_BOUNDS.max, m)) }
   setRangeMultiplier(m: number) { this.rangeMultiplier = Math.max(RANGE_MULTIPLIER_BOUNDS.min, Math.min(RANGE_MULTIPLIER_BOUNDS.max, m)) }
+  /** 更新模式設定（如手機時 playerBounds、enemySpeedMultiplier） */
+  updateModeConfig(partial: Partial<Pick<GameModeConfig, 'playerBounds' | 'enemySpeedMultiplier'>>) {
+    if ('playerBounds' in partial) this.modeConfig.playerBounds = partial.playerBounds
+    if ('enemySpeedMultiplier' in partial) this.modeConfig.enemySpeedMultiplier = partial.enemySpeedMultiplier
+    const b = this.modeConfig.playerBounds
+    if (b) {
+      const p = this.state.player.position
+      p.x = Math.max(b.minX, Math.min(b.maxX, p.x))
+      p.y = Math.max(b.minY, Math.min(b.maxY, p.y))
+    }
+  }
   private effRange(base: number) { return Math.round(base * this.rangeMultiplier) }
 
   /** 從畫面邊緣生成敵人（無限模式） */
@@ -386,13 +404,14 @@ export class GameEngine {
       default: x = -buffer; y = Math.random() * canvasHeight; break
     }
 
+    const speedMul = this.modeConfig.enemySpeedMultiplier ?? 1
     const enemy: Entity = {
       id: `enemy-${this.genId()}`,
       position: { x, y },
       size: config.size,
       hp: config.hp,
       maxHp: config.hp,
-      speed: config.speed,
+      speed: config.speed * speedMul,
       color: config.color,
       frozenUntil: 0,
       frozenDamage: 0,
@@ -464,6 +483,17 @@ export class GameEngine {
     this.state.keysPressed.delete(key.toLowerCase())
   }
 
+  /** 觸控搖桿輸入（dx, dy 範圍 -1~1，null 則使用 keysPressed） */
+  setMoveInput(dx: number | null, dy: number | null) {
+    if (dx == null || dy == null) {
+      this.state.moveInput = null
+      return
+    }
+    const len = Math.sqrt(dx * dx + dy * dy)
+    const cap = Math.min(1, len > 0 ? len : 1)
+    this.state.moveInput = len > 0 ? { dx: (dx / len) * cap, dy: (dy / len) * cap } : { dx: 0, dy: 0 }
+  }
+
   private update(dt: number) {
     this.deadEnemyIds.clear()
     this.updatePlayerMovement(dt)
@@ -513,19 +543,23 @@ export class GameEngine {
   }
 
   private updatePlayerMovement(dt: number) {
-    const { player, keysPressed, canvasWidth, canvasHeight } = this.state
+    const { player, keysPressed, moveInput, canvasWidth, canvasHeight } = this.state
     let dx = 0
     let dy = 0
 
-    if (keysPressed.has('w') || keysPressed.has('arrowup')) dy -= 1
-    if (keysPressed.has('s') || keysPressed.has('arrowdown')) dy += 1
-    if (keysPressed.has('a') || keysPressed.has('arrowleft')) dx -= 1
-    if (keysPressed.has('d') || keysPressed.has('arrowright')) dx += 1
-
-    if (dx !== 0 && dy !== 0) {
-      const len = Math.sqrt(dx * dx + dy * dy)
-      dx /= len
-      dy /= len
+    if (moveInput) {
+      dx = moveInput.dx
+      dy = moveInput.dy
+    } else {
+      if (keysPressed.has('w') || keysPressed.has('arrowup')) dy -= 1
+      if (keysPressed.has('s') || keysPressed.has('arrowdown')) dy += 1
+      if (keysPressed.has('a') || keysPressed.has('arrowleft')) dx -= 1
+      if (keysPressed.has('d') || keysPressed.has('arrowright')) dx += 1
+      if (dx !== 0 && dy !== 0) {
+        const len = Math.sqrt(dx * dx + dy * dy)
+        dx /= len
+        dy /= len
+      }
     }
 
     player.position.x += dx * player.speed * dt
@@ -535,9 +569,15 @@ export class GameEngine {
       this.state.playerFacingAngle = Math.atan2(dy, dx)
     }
 
-    const margin = player.size
-    player.position.x = Math.max(margin, Math.min(canvasWidth - margin, player.position.x))
-    player.position.y = Math.max(margin, Math.min(canvasHeight - margin, player.position.y))
+    const bounds = this.modeConfig.playerBounds
+    if (bounds) {
+      player.position.x = Math.max(bounds.minX, Math.min(bounds.maxX, player.position.x))
+      player.position.y = Math.max(bounds.minY, Math.min(bounds.maxY, player.position.y))
+    } else {
+      const margin = player.size
+      player.position.x = Math.max(margin, Math.min(canvasWidth - margin, player.position.x))
+      player.position.y = Math.max(margin, Math.min(canvasHeight - margin, player.position.y))
+    }
   }
 
   /** 更新巡邏木樁的左右移動（冰封時暫停） */

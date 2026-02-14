@@ -3,8 +3,20 @@
 @tailwind utilities;
 
 @layer base {
-  html, body {
+  html, body, #root {
+    margin: 0;
+    padding: 0;
+    width: 100%;
     height: 100%;
+    min-height: 100dvh;
+    overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-overflow-scrolling: touch;
+    background: #0d0d1a;
+  }
+
+  * {
+    box-sizing: border-box;
   }
 
   .font-poppins {
@@ -18,5 +30,11 @@
   .font-caveat {
     font-family: "Caveat", cursive;
   }
+}
+
+/* 觸控時禁用雙擊縮放、長按選取 */
+html {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 

@@ -11,6 +11,8 @@ export interface HudConfig {
   killStreak: number
   survivalTime: number
   invincibleUntil: number
+  /** 手機版：不繪製 canvas 內 HUD（改由 HTML 顯示） */
+  hideHudOverlay?: boolean
 }
 
 /** 繪製遊戲畫面 */
@@ -67,7 +69,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
 
   for (const dn of damageNumbers) drawDamageNumber(ctx, dn, now)
 
-  if (hud) {
+  if (hud && !hud.hideHudOverlay) {
     drawHud(ctx, canvasWidth, hud)
   }
 }
