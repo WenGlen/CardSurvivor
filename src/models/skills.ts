@@ -1,51 +1,34 @@
 import type { SkillDefinition } from './types'
+import { ICE_ARROW_BASE, ICE_SPIKE_BASE, FIREBALL_BASE, BEAM_BASE } from '../config'
 
-/**
- * 冰箭技能定義
- * 以主方向為軸心，平均往各方向發出數個冰箭。
- * 初始數值：傷害 12 ｜ 速度 220 px/s ｜ 冷卻 1.2s ｜ 數量 3 ｜ 穿透 0 ｜ 散射角 30°
- */
+/** 冰箭技能定義（數值來自 config/skills.config） */
 export const iceArrow: SkillDefinition = {
   id: 'ice-arrow',
   name: '冰箭',
   element: 'ICE',
   damageType: 'PROJECTILE',
-  description: '以主方向為軸心，平均往各方向發出數個冰箭。因平均各方向擴散，單體傷害較低。',
-  initialStats: {
-    damage: 12,
-    speed: 220,
-    cooldown: 1.2,
-    count: 3,
-    pierceCount: 0,
-    spreadAngle: 30,
-  },
+  description: '所有冰箭平分 360° 發射，以最近敵人為主方向。因平均擴散，單體傷害中等。',
+  initialStats: { ...ICE_ARROW_BASE },
 }
 
-/**
- * 冰錐技能定義
- * 以主方向前方一段距離外的弧形為範圍，從地面射出冰錐。
- * 初始數值：傷害 25 ｜ 範圍弧度 60° ｜ 施法距離 200px ｜ 冷卻 2.5s ｜ 冰錐柱數 5
- */
+/** 凍土技能定義（數值來自 config/skills.config） */
 export const iceSpike: SkillDefinition = {
   id: 'ice-spike',
-  name: '冰錐',
+  name: '凍土',
   element: 'ICE',
   damageType: 'AREA',
-  description: '以主方向前方一段距離外的弧形為範圍，從地面射出冰錐。',
+  description: '在主角前方生成扇形凍土區域，進入範圍的敵人持續受傷並減速。',
   initialStats: {
-    damage: 25,
-    angle: 60,
-    castRange: 200,
-    cooldown: 2.5,
-    count: 5,
+    damage: ICE_SPIKE_BASE.damage,
+    angle: ICE_SPIKE_BASE.arcAngle,
+    castRange: ICE_SPIKE_BASE.castRange,
+    cooldown: ICE_SPIKE_BASE.cooldown,
+    duration: ICE_SPIKE_BASE.duration,
+    slowRate: ICE_SPIKE_BASE.slowRate,
   },
 }
 
-/**
- * 火球技能定義
- * 向主角前方拋出火球，落地時造成範圍爆炸傷害。
- * 初始數值：傷害 45 ｜ 爆炸半徑 80px ｜ 拋射距離 250px ｜ 冷卻 3s ｜ 數量 1
- */
+/** 火球技能定義（數值來自 config/skills.config） */
 export const fireball: SkillDefinition = {
   id: 'fireball',
   name: '火球',
@@ -53,31 +36,27 @@ export const fireball: SkillDefinition = {
   damageType: 'PROJECTILE',
   description: '向主角前方拋出火球，落地時造成範圍爆炸傷害。因需要主動控制方向，傷害較高。',
   initialStats: {
-    damage: 45,
-    radius: 80,
-    range: 250,
-    cooldown: 3,
-    count: 1,
+    damage: FIREBALL_BASE.damage,
+    radius: FIREBALL_BASE.explosionRadius,
+    range: FIREBALL_BASE.throwDistance,
+    cooldown: FIREBALL_BASE.cooldown,
+    count: FIREBALL_BASE.count,
   },
 }
 
-/**
- * 光束技能定義
- * 向主角前方直線發射光束，持續照射造成範圍傷害。
- * 初始數值：傷害 30/s ｜ 射程 400px ｜ 寬度 20px ｜ 持續 2s ｜ 冷卻 3s ｜ 數量 1
- */
+/** 光束技能定義（數值來自 config/skills.config） */
 export const beam: SkillDefinition = {
   id: 'beam',
   name: '光束',
   element: 'FIRE',
   damageType: 'AREA',
-  description: '向主角前方直線發射光束，持續照射造成範圍傷害。因需要主動控制方向，傷害較高。',
+  description: '向主角前方發射單道光束，範圍內敵人受傷。單發高傷，畫面簡潔。',
   initialStats: {
-    damage: 30,
-    range: 400,
-    radius: 20, // 寬度（半寬）
-    duration: 2,
-    cooldown: 3,
+    damage: BEAM_BASE.pulseDamage,
+    range: BEAM_BASE.range,
+    radius: BEAM_BASE.width,
+    duration: BEAM_BASE.duration,
+    cooldown: BEAM_BASE.cooldown,
     count: 1,
   },
 }

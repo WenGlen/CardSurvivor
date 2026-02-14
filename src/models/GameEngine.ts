@@ -1,5 +1,15 @@
-import type { Entity, Projectile, Position, DamageNumber, ColdZone, IceSpikeEffect, IceSpikeMine, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, BeamEffect, BeamSegment, BeamTrail, SkillDefinition } from './types'
+import type { Entity, Projectile, Position, DamageNumber, ColdZone, FrozenGroundZone, FrozenGroundMine, FrozenGroundShard, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, BeamEffect, BeamSegment, BeamTrail, SkillDefinition, MapPickup } from './types'
 import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from './cards'
+import {
+  PICKUP_TYPE_WEIGHTS,
+  PICKUP_DURATION_MS,
+  PICKUP_SPAWN_INTERVAL,
+  PICKUP_COLLECT_RADIUS,
+  INVINCIBLE_DURATION_MS,
+  SLOW_MOVE_MULTIPLIER,
+  COOLDOWN_MULTIPLIER_BOUNDS,
+  RANGE_MULTIPLIER_BOUNDS,
+} from '../config'
 
 /** 遊戲模式設定（預設為練習場行為） */
 export interface GameModeConfig {
@@ -17,6 +27,12 @@ export interface GameModeConfig {
   fireAllEquippedSkills?: boolean
   /** 不生成初始敵人 */
   noInitialEnemies?: boolean
+  /** 地圖上隨機出現強化碎片 */
+  enableMapPickups?: boolean
+  /** 生成時解析目標卡槽，回傳 null 則不生成 */
+  resolvePickupTarget?: (type: 'cooldown' | 'range' | 'count') => number | null
+  /** 拾取碎片時回呼（targetSlotIndex 為生成時指定的卡槽） */
+  onPickupCollected?: (type: 'cooldown' | 'range' | 'count', targetSlotIndex: number) => void
 }
 
 /** 遊戲引擎狀態 */
@@ -26,8 +42,9 @@ export interface GameState {
   projectiles: Projectile[]
   damageNumbers: DamageNumber[]
   coldZones: ColdZone[]
-  iceSpikeEffects: IceSpikeEffect[]
-  iceSpikeMines: IceSpikeMine[]
+  iceSpikeEffects: FrozenGroundZone[]
+  iceSpikeMines: FrozenGroundMine[]
+  frozenGroundShards: FrozenGroundShard[]
   resonanceWaves: ResonanceWave[]
   fireballProjectiles: FireballProjectile[]
   fireExplosions: FireExplosion[]
@@ -42,6 +59,10 @@ export interface GameState {
   canvasHeight: number
   /** 玩家無敵結束時間戳（ms） */
   invincibleUntil: number
+  /** 主角朝向角度（弧度），用於凍土等方向技能 */
+  playerFacingAngle: number
+  /** 地圖掉落物（無限模式） */
+  mapPickups: MapPickup[]
 }
 
 /** 遊戲引擎 - 管理遊戲循環（練習場 / 無限模式） */
@@ -52,7 +73,7 @@ export class GameEngine {
   private iceSpikeSnapshot: IceSpikeSnapshot | null = null
   private fireballSnapshot: FireballSnapshot | null = null
   private beamSnapshot: BeamSnapshot | null = null
-  private convergenceTracker: Map<string, { time: number; damage: number }[]> = new Map()
+  private convergenceTracker: Map<string, { time: number; damage: number; hitCount: number }[]> = new Map()
   private enemyMaxHp = 9999
   private nextId = 0
   private lastTime = 0
@@ -61,6 +82,9 @@ export class GameEngine {
   private modeConfig: GameModeConfig
   /** 本幀中死亡的敵人 id（批次移除用） */
   private deadEnemyIds: Set<string> = new Set()
+  private cooldownMultiplier = 1
+  private rangeMultiplier = 1
+  private lastPickupSpawnTime = 0
 
   constructor(canvasWidth: number, canvasHeight: number, onStateChange: () => void, modeConfig?: GameModeConfig) {
     this.onStateChange = onStateChange
@@ -104,6 +128,7 @@ export class GameEngine {
       coldZones: [],
       iceSpikeEffects: [],
       iceSpikeMines: [],
+      frozenGroundShards: [],
       resonanceWaves: [],
       fireballProjectiles: [],
       fireExplosions: [],
@@ -117,6 +142,10 @@ export class GameEngine {
       canvasWidth,
       canvasHeight,
       invincibleUntil: 0,
+      playerFacingAngle: initialEnemies.length > 0
+        ? Math.atan2(initialEnemies[0].position.y - canvasHeight / 2, initialEnemies[0].position.x - canvasWidth / 3)
+        : 0,
+      mapPickups: [],
     }
   }
 
@@ -168,6 +197,18 @@ export class GameEngine {
     }
   }
 
+  /** 敵人是否在任一寒氣區域內（極寒領域減速 30%） */
+  private isEnemyInColdZone(enemy: Entity): boolean {
+    const now = performance.now()
+    for (const cz of this.state.coldZones) {
+      if (now - cz.createdAt >= cz.duration) continue
+      if (this.distance(enemy.position, cz.position) < cz.radius + enemy.size) {
+        return true
+      }
+    }
+    return false
+  }
+
   /** 敵人追擊玩家 AI */
   private updateEnemyAI(dt: number) {
     const { player, enemies } = this.state
@@ -176,7 +217,9 @@ export class GameEngine {
       if (enemy.hp <= 0) continue
       // 凍結中不移動
       if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) continue
-      const slowMul = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? 0.7 : 1
+      const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowMul = Math.min(slowByDebuff, slowByColdZone)
       const dx = player.position.x - enemy.position.x
       const dy = player.position.y - enemy.position.y
       const dist = Math.sqrt(dx * dx + dy * dy)
@@ -201,9 +244,69 @@ export class GameEngine {
       if (dist < player.size + enemy.size) {
         const dmg = this.modeConfig.contactDamage ?? 5
         player.hp -= dmg
-        this.state.invincibleUntil = now + 500 // 0.5 秒無敵
+        this.state.invincibleUntil = now + INVINCIBLE_DURATION_MS
         this.spawnDamageNumber(player.position, dmg, '#FF5252', 22)
         break // 一次只受一擊
+      }
+    }
+  }
+
+  /** 地圖掉落物：生成 + 拾取判定 */
+  private updateMapPickups() {
+    const now = performance.now()
+    const { player, mapPickups, canvasWidth, canvasHeight } = this.state
+
+    // 生成：每間隔隨機出現一個
+    if (this.lastPickupSpawnTime === 0) this.lastPickupSpawnTime = now
+    if (now - this.lastPickupSpawnTime >= PICKUP_SPAWN_INTERVAL * 1000) {
+      this.lastPickupSpawnTime = now
+      const margin = 60
+      let x = margin + Math.random() * (canvasWidth - margin * 2)
+      let y = margin + Math.random() * (canvasHeight - margin * 2)
+      // 避免生成在玩家正中心
+      const dx = x - player.position.x
+      const dy = y - player.position.y
+      if (dx * dx + dy * dy < 80 * 80) {
+        const angle = Math.atan2(dy, dx) + Math.PI
+        x = player.position.x + Math.cos(angle) * 100
+        y = player.position.y + Math.sin(angle) * 100
+      }
+      const types: Array<'cooldown' | 'range' | 'count'> = ['cooldown', 'range', 'count']
+      const weights = [PICKUP_TYPE_WEIGHTS.cooldown, PICKUP_TYPE_WEIGHTS.range, PICKUP_TYPE_WEIGHTS.count]
+      let r = Math.random()
+      let type: 'cooldown' | 'range' | 'count' = 'cooldown'
+      for (let i = 0; i < weights.length; i++) {
+        r -= weights[i]
+        if (r <= 0) { type = types[i]; break }
+      }
+      const targetSlot = this.modeConfig.resolvePickupTarget?.(type)
+      if (targetSlot == null) return
+      mapPickups.push({
+        id: this.genId(),
+        position: { x, y },
+        type,
+        targetSlotIndex: targetSlot,
+        createdAt: now,
+        duration: PICKUP_DURATION_MS,
+      })
+    }
+
+    // 過期移除
+    for (let i = mapPickups.length - 1; i >= 0; i--) {
+      const p = mapPickups[i]
+      if (now - p.createdAt >= p.duration) {
+        mapPickups.splice(i, 1)
+      }
+    }
+
+    // 拾取判定
+    for (let i = mapPickups.length - 1; i >= 0; i--) {
+      const p = mapPickups[i]
+      const dx = player.position.x - p.position.x
+      const dy = player.position.y - p.position.y
+      if (dx * dx + dy * dy < PICKUP_COLLECT_RADIUS * PICKUP_COLLECT_RADIUS) {
+        mapPickups.splice(i, 1)
+        this.modeConfig.onPickupCollected?.(p.type, p.targetSlotIndex)
       }
     }
   }
@@ -236,16 +339,22 @@ export class GameEngine {
     }
   }
 
-  /** 取得技能總冷卻時間 */
+  /** 取得技能總冷卻時間（已套用冷卻倍率） */
   getCooldownForSkill(skillId: string, skill: SkillDefinition): number {
+    let base = 1
     switch (skillId) {
-      case 'ice-arrow': return this.iceArrowSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1)
-      case 'ice-spike': return this.iceSpikeSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1)
-      case 'fireball': return this.fireballSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1)
-      case 'beam': return this.beamSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1)
-      default: return skill.initialStats.cooldown ?? 1
+      case 'ice-arrow': base = this.iceArrowSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
+      case 'ice-spike': base = this.iceSpikeSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
+      case 'fireball': base = this.fireballSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
+      case 'beam': base = this.beamSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
+      default: base = skill.initialStats.cooldown ?? 1
     }
+    return Math.max(COOLDOWN_MULTIPLIER_BOUNDS.min, base * this.cooldownMultiplier)
   }
+
+  setCooldownMultiplier(m: number) { this.cooldownMultiplier = Math.max(COOLDOWN_MULTIPLIER_BOUNDS.min, Math.min(COOLDOWN_MULTIPLIER_BOUNDS.max, m)) }
+  setRangeMultiplier(m: number) { this.rangeMultiplier = Math.max(RANGE_MULTIPLIER_BOUNDS.min, Math.min(RANGE_MULTIPLIER_BOUNDS.max, m)) }
+  private effRange(base: number) { return Math.round(base * this.rangeMultiplier) }
 
   /** 從畫面邊緣生成敵人（無限模式） */
   spawnEnemyAtEdge(config: { hp: number; speed: number; size: number; color: string }) {
@@ -303,6 +412,7 @@ export class GameEngine {
     this.state.beamTrails = []
     this.state.iceSpikeEffects = []
     this.state.iceSpikeMines = []
+    this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireExplosions = []
     this.state.lavaZones = []
@@ -379,7 +489,7 @@ export class GameEngine {
     this.updateBurningCorpses(dt)
     this.updateBeamEffects(dt)
     this.updateBeamTrails(dt)
-    this.updateIceSpikeEffects()
+    this.updateIceSpikeEffects(dt)
     this.updateIceSpikeMines()
     this.updateResonanceWaves()
     this.updateDamageNumbers()
@@ -389,6 +499,11 @@ export class GameEngine {
     // 玩家碰撞傷害
     if (this.modeConfig.enablePlayerDamage) {
       this.updatePlayerCollision()
+    }
+
+    // 地圖掉落物（無限模式）
+    if (this.modeConfig.enableMapPickups) {
+      this.updateMapPickups()
     }
 
     // 批次移除死亡敵人
@@ -416,6 +531,10 @@ export class GameEngine {
     player.position.x += dx * player.speed * dt
     player.position.y += dy * player.speed * dt
 
+    if (dx !== 0 || dy !== 0) {
+      this.state.playerFacingAngle = Math.atan2(dy, dx)
+    }
+
     const margin = player.size
     player.position.x = Math.max(margin, Math.min(canvasWidth - margin, player.position.x))
     player.position.y = Math.max(margin, Math.min(canvasHeight - margin, player.position.y))
@@ -429,7 +548,9 @@ export class GameEngine {
       if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) continue
 
       const p = enemy.patrol
-      const slowMul = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? 0.7 : 1
+      const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowMul = Math.min(slowByDebuff, slowByColdZone)
       enemy.position.x += p.speed * p.direction * dt * slowMul
 
       if (enemy.position.x >= p.centerX + p.range) {
@@ -484,7 +605,10 @@ export class GameEngine {
     }
   }
 
-  /** 根據快照發射冰箭（每支箭有獨立屬性） */
+  /**
+   * 根據快照發射冰箭（每支箭有獨立屬性）
+   * 機制：所有冰箭平分 360° 發射，以最近敵人為攻擊主方向，主方向必定有一支
+   */
   private fireIceArrowFromSnapshot() {
     const snapshot = this.iceArrowSnapshot!
     const { player } = this.state
@@ -492,18 +616,18 @@ export class GameEngine {
     const count = arrows.length
 
     const target = this.findNearestEnemy(player.position)
-    let baseAngle = 0
-    if (target) {
-      baseAngle = Math.atan2(
-        target.position.y - player.position.y,
-        target.position.x - player.position.x,
-      )
-    }
+    const baseAngle = target
+      ? Math.atan2(
+          target.position.y - player.position.y,
+          target.position.x - player.position.x,
+        )
+      : 0
 
-    const spreadRad = (snapshot.spreadAngle * Math.PI) / 180
+    // 平分 360°：主方向（baseAngle）為第 0 支，其餘均分
+    const fullCircle = 2 * Math.PI
+    const angleStep = count === 1 ? 0 : fullCircle / count
     for (let i = 0; i < count; i++) {
-      const offset = count === 1 ? 0 : -spreadRad / 2 + (spreadRad / (count - 1)) * i
-      const angle = baseAngle + offset
+      const angle = baseAngle + angleStep * i
       const arrow = arrows[i]
 
       this.state.projectiles.push({
@@ -527,6 +651,8 @@ export class GameEngine {
         hasColdZone: arrow.hasColdZone,
         hasConvergence: arrow.hasConvergence,
         hasChainExplosion: arrow.hasChainExplosion,
+        hasShardBarrage: arrow.hasShardBarrage,
+        chillChanceBonus: arrow.chillChanceBonus ?? 0,
         chainDepth: 0,
         hitEnemies: new Set(),
         alive: true,
@@ -574,6 +700,8 @@ export class GameEngine {
         hasColdZone: false,
         hasConvergence: false,
         hasChainExplosion: false,
+        hasShardBarrage: false,
+        chillChanceBonus: 0,
         chainDepth: 0,
         hitEnemies: new Set(),
         alive: true,
@@ -581,216 +709,200 @@ export class GameEngine {
     }
   }
 
-  /** 發射冰錐：根據快照處理弧形/牢籠/地雷/蔓延/共振等模式 */
+  /** 發射凍土：根據快照生成扇形區域（或地雷） */
   private fireIceSpike() {
     const snapshot = this.iceSpikeSnapshot
     if (!snapshot) return
 
     const { player } = this.state
-    const { arcAngle, castRange, pillarCount, damage, hasSpread, isCage, isMine, spreadIsMine, hasResonance } = snapshot
+    const { arcAngle, castRange, duration, dps, slowRate, hasSpread, isCage, isMine, hasTracking, spreadHasDoubleHit, spreadHasShardSplash } = snapshot
 
     const target = this.findNearestEnemy(player.position)
-    let baseAngle = 0
-    if (target) {
-      baseAngle = Math.atan2(
-        target.position.y - player.position.y,
-        target.position.x - player.position.x,
-      )
-    }
+    const baseAngle = this.state.playerFacingAngle
 
-    // ── 1. 計算主冰錐柱位置 ──
-    const pillarPositions: Position[] = []
+    let cageRadius = 100
+    const cageCenter: Position = isCage && hasTracking && target
+      ? { ...target.position }
+      : { ...player.position }
 
-    if (isCage) {
-      // 牢籠模式：封閉圓環，以目標方向 castRange 處為圓心，半徑 60px
-      const cageCenter: Position = {
-        x: player.position.x + Math.cos(baseAngle) * castRange,
-        y: player.position.y + Math.sin(baseAngle) * castRange,
-      }
-      const cageRadius = 60
-      for (let i = 0; i < pillarCount; i++) {
-        const angle = (2 * Math.PI / pillarCount) * i
-        pillarPositions.push({
-          x: cageCenter.x + Math.cos(angle) * cageRadius,
-          y: cageCenter.y + Math.sin(angle) * cageRadius,
-        })
-      }
+    let sectorOrigin: Position
+    let sectorAngle = baseAngle
+
+    if (hasTracking && target) {
+      sectorOrigin = { ...player.position }
+      sectorAngle = Math.atan2(target.position.y - player.position.y, target.position.x - player.position.x)
     } else {
-      // 弧形模式
-      const arcRad = (arcAngle * Math.PI) / 180
-      for (let i = 0; i < pillarCount; i++) {
-        const offset = pillarCount === 1 ? 0 : -arcRad / 2 + (arcRad / (pillarCount - 1)) * i
-        const angle = baseAngle + offset
-        pillarPositions.push({
-          x: player.position.x + Math.cos(angle) * castRange,
-          y: player.position.y + Math.sin(angle) * castRange,
-        })
-      }
+      sectorOrigin = { ...player.position }
     }
 
-    // ── 2. 計算蔓延冰錐位置（牢籠模式下無效） ──
-    const spreadPositions: Position[] = []
-    if (hasSpread && !isCage) {
-      const arcRad = (arcAngle * Math.PI) / 180
-      const spreadAngle = 80 / castRange // 80px 轉弧度
-      const spreadPerSide = 2
-      for (let side = -1; side <= 1; side += 2) {
-        const edgeAngle = baseAngle + side * arcRad / 2
-        for (let j = 1; j <= spreadPerSide; j++) {
-          const angle = edgeAngle + side * (spreadAngle / spreadPerSide) * j
-          spreadPositions.push({
-            x: player.position.x + Math.cos(angle) * castRange,
-            y: player.position.y + Math.sin(angle) * castRange,
-          })
-        }
-      }
+    if (hasSpread && isCage) {
+      cageRadius = 130
     }
+    cageRadius = this.effRange(cageRadius)
+    const effCastRange = this.effRange(castRange)
 
-    const now = performance.now()
-    const hitRadius = 20
-
-    // ── 3. 地雷模式：佈置地雷而非立即傷害 ──
     if (isMine) {
-      // 主冰錐 → 地雷
-      for (const pos of pillarPositions) {
-        this.state.iceSpikeMines.push({
-          id: this.genId(),
-          position: { ...pos },
-          damage: Math.round(damage * 1.5),
-          detectRadius: hitRadius,
-          createdAt: now,
-          duration: 8000,
-          triggered: false,
-          triggerTime: 0,
-        })
-      }
-
-      // 蔓延冰錐：如果 spreadIsMine 則也是地雷，否則立即觸發
-      if (hasSpread && !isCage) {
-        if (spreadIsMine) {
-          for (const pos of spreadPositions) {
-            this.state.iceSpikeMines.push({
-              id: this.genId(),
-              position: { ...pos },
-              damage: Math.round(damage * 0.5 * 1.5),
-              detectRadius: hitRadius,
-              createdAt: now,
-              duration: 8000,
-              triggered: false,
-              triggerTime: 0,
-            })
-          }
-        } else {
-          // 蔓延冰錐正常觸發
-          const spreadDamage = Math.round(damage * 0.5)
-          const spreadHit = new Set<string>()
-          this.applyIceSpikeDamage(spreadPositions, spreadDamage, spreadHit, hitRadius, snapshot)
-          this.state.iceSpikeEffects.push({
-            id: this.genId(),
-            pillarPositions: [],
-            spreadPillarPositions: spreadPositions,
-            damage: 0,
-            spreadDamage,
-            isCage: false,
-            createdAt: now,
-            duration: 500,
-            hitEnemies: spreadHit,
-          })
-        }
-      }
+      const effectiveArcAngle = hasSpread && !isCage ? arcAngle + 50 : arcAngle
+      this.spawnFrozenGroundMine(
+        isCage ? cageCenter : sectorOrigin,
+        sectorAngle,
+        effectiveArcAngle,
+        isCage ? cageRadius : effCastRange,
+        dps * 1.5,
+        slowRate,
+        isCage,
+      )
       return
     }
 
-    // ── 4. 正常模式：立即傷害 ──
-    const hitEnemies = new Set<string>()
-    this.applyIceSpikeDamage(pillarPositions, damage, hitEnemies, hitRadius, snapshot)
-
-    // 蔓延傷害
-    const spreadDamage = Math.round(damage * 0.5)
-    const spreadHit = new Set<string>()
-    if (spreadPositions.length > 0) {
-      this.applyIceSpikeDamage(spreadPositions, spreadDamage, spreadHit, hitRadius, snapshot)
+    if (hasSpread && !isCage) {
+      const spreadArc = 25
+      const mainDir = sectorAngle
+      const mainArc = arcAngle
+      const spreadDps = Math.round(dps * 0.5)
+      const toRad = (deg: number) => (deg * Math.PI) / 180
+      const leftDir = mainDir - toRad((mainArc + spreadArc) / 2)
+      const rightDir = mainDir + toRad((mainArc + spreadArc) / 2)
+      this.spawnFrozenGroundZone(
+        sectorOrigin,
+        mainDir,
+        mainArc,
+        effCastRange,
+        dps,
+        slowRate,
+        duration * 1000,
+        isCage,
+        false,
+        snapshot.hasDoubleHit,
+        snapshot.hasShardSplash,
+      )
+      this.spawnFrozenGroundZone(
+        sectorOrigin,
+        leftDir,
+        spreadArc,
+        effCastRange,
+        spreadDps,
+        slowRate,
+        duration * 1000,
+        isCage,
+        false,
+        spreadHasDoubleHit,
+        spreadHasShardSplash,
+        true,
+      )
+      this.spawnFrozenGroundZone(
+        sectorOrigin,
+        rightDir,
+        spreadArc,
+        effCastRange,
+        spreadDps,
+        slowRate,
+        duration * 1000,
+        isCage,
+        false,
+        spreadHasDoubleHit,
+        spreadHasShardSplash,
+        true,
+      )
+    } else {
+      const effectiveArcAngle = arcAngle
+      this.spawnFrozenGroundZone(
+        isCage ? cageCenter : sectorOrigin,
+        sectorAngle,
+        effectiveArcAngle,
+        isCage ? cageRadius : effCastRange,
+        dps,
+        slowRate,
+        duration * 1000,
+        isCage,
+        false,
+        snapshot.hasDoubleHit,
+        snapshot.hasShardSplash,
+      )
     }
+  }
 
-    // ── 5. 共振波：同時命中 3+ 敵人時觸發 ──
-    if (hasResonance) {
-      // 合併主冰錐和蔓延的命中
-      const allHit = new Set([...hitEnemies, ...spreadHit])
-      if (allHit.size >= 3) {
-        this.spawnResonanceWave(pillarPositions, spreadPositions, damage)
-      }
-    }
-
-    // ── 6. 建立視覺效果 ──
-    const duration = isCage ? 3000 : 500
+  private spawnFrozenGroundZone(
+    origin: Position,
+    direction: number,
+    arcAngle: number,
+    radius: number,
+    dps: number,
+    slowRate: number,
+    duration: number,
+    isCage: boolean,
+    isMineTriggered: boolean,
+    hasDoubleHit?: boolean,
+    hasShardSplash?: boolean,
+    isSpreadZone?: boolean,
+  ) {
     this.state.iceSpikeEffects.push({
       id: this.genId(),
-      pillarPositions,
-      spreadPillarPositions: spreadPositions,
-      damage,
-      spreadDamage: spreadPositions.length > 0 ? spreadDamage : 0,
-      isCage,
-      createdAt: now,
+      origin: { ...origin },
+      direction,
+      arcAngle,
+      radius,
+      dps,
+      slowRate,
+      createdAt: performance.now(),
       duration,
-      hitEnemies,
+      hitEnemies: new Set(),
+      isCage,
+      isMineTriggered,
+      hasDoubleHit,
+      hasShardSplash,
+      isSpreadZone,
     })
   }
 
-  /** 冰錐傷害應用 + 失溫 + 永凍結晶判定 */
-  private applyIceSpikeDamage(
-    positions: Position[],
-    damage: number,
-    hitSet: Set<string>,
-    hitRadius: number,
-    snapshot: IceSpikeSnapshot,
+  private spawnFrozenGroundMine(
+    position: Position,
+    direction: number,
+    arcAngle: number,
+    radius: number,
+    dps: number,
+    slowRate: number,
+    isCage: boolean,
   ) {
-    const now = performance.now()
-    for (const pos of positions) {
-      for (const enemy of this.state.enemies) {
-        if (enemy.hp <= 0) continue
-        if (hitSet.has(enemy.id)) continue
-        const dist = this.distance(pos, enemy.position)
-        if (dist < hitRadius + enemy.size) {
-          // 永凍結晶：命中失溫敵人 → 凍結 1.5s
-          const isSlow = enemy.slowUntil > 0 && now < enemy.slowUntil
-          let actualDmg = damage
-
-          if (snapshot.hasPermafrost && isSlow) {
-            enemy.frozenUntil = now + 1500
-            enemy.frozenDamage = 0
-            this.spawnDamageNumber(enemy.position, 0, '#80DEEA')
-          }
-
-          // 凍結中受傷 +25%
-          if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) {
-            actualDmg = Math.round(damage * 1.25)
-          }
-
-          enemy.hp -= actualDmg
-          hitSet.add(enemy.id)
-          this.spawnDamageNumber(enemy.position, actualDmg)
-
-          // 施加失溫（2 秒減速）
-          enemy.slowUntil = now + 2000
-
-          if (enemy.hp <= 0) {
-            this.handleEnemyDeath(enemy)
-          }
-        }
-      }
-    }
+    this.state.iceSpikeMines.push({
+      id: this.genId(),
+      position: { ...position },
+      dps,
+      radius,
+      slowRate,
+      detectRadius: isCage ? 90 : 35,
+      createdAt: performance.now(),
+      duration: 8000,
+      triggered: false,
+      triggerTime: 0,
+      arcAngle,
+      direction,
+      isCage,
+    })
   }
 
-  /** 產生共振波：以命中區域中心為圓心 */
-  private spawnResonanceWave(mainPositions: Position[], spreadPositions: Position[], baseDamage: number) {
-    const all = [...mainPositions, ...spreadPositions]
-    if (all.length === 0) return
-    const cx = all.reduce((s, p) => s + p.x, 0) / all.length
-    const cy = all.reduce((s, p) => s + p.y, 0) / all.length
+  /** 檢查點是否在扇形（或牢籠圓形）內 */
+  private isPointInSector(origin: Position, direction: number, arcAngleDeg: number, radius: number, point: Position, isCage: boolean): boolean {
+    const dx = point.x - origin.x
+    const dy = point.y - origin.y
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    if (isCage) {
+      return dist <= radius
+    }
+    if (dist > radius) return false
+    const angle = Math.atan2(dy, dx)
+    let diff = angle - direction
+    while (diff > Math.PI) diff -= 2 * Math.PI
+    while (diff < -Math.PI) diff += 2 * Math.PI
+    const halfArc = (arcAngleDeg * Math.PI) / 180 / 2
+    return Math.abs(diff) <= halfArc
+  }
 
+  /** 產生共振波 */
+  private spawnResonanceWave(origin: Position, baseDamage: number) {
     this.state.resonanceWaves.push({
       id: this.genId(),
-      position: { x: cx, y: cy },
+      position: { ...origin },
       maxRadius: 120,
       damage: Math.round(baseDamage * 0.8),
       createdAt: performance.now(),
@@ -827,7 +939,7 @@ export class GameEngine {
 
       if (fb.isMeteor) {
         // 隕石模式：延遲落地，目標位置 ±30px 隨機偏移
-        const dist = snapshot.throwDistance
+        const dist = this.effRange(snapshot.throwDistance)
         const tx = player.position.x + Math.cos(angle) * dist + (Math.random() - 0.5) * 60
         const ty = player.position.y + Math.sin(angle) * dist + (Math.random() - 0.5) * 60
         this.state.fireballProjectiles.push({
@@ -857,7 +969,7 @@ export class GameEngine {
           damage: fb.damage,
           explosionRadius: fb.explosionRadius,
           distanceTraveled: 0,
-          maxDistance: snapshot.throwDistance,
+          maxDistance: this.effRange(snapshot.throwDistance),
           hasBounce: fb.hasBounce,
           hasLava: fb.hasLava,
           hasScatter: fb.hasScatter,
@@ -1151,58 +1263,50 @@ export class GameEngine {
     )
   }
 
-  /** 發射光束：根據快照產生光束效果 */
+  /** 發射光束：根據快照產生光束效果（v3：脈衝制，向主角朝向發射） */
   private fireBeam() {
     const snapshot = this.beamSnapshot
     if (!snapshot) return
 
-    const { player, enemies } = this.state
+    const { player } = this.state
     const beams = snapshot.beams
     const count = beams.length
     const now = performance.now()
 
-    // 收集可用目標，每道光束朝不同敵人
-    const usedEnemies = new Set<string>()
+    // v3：以主角朝向為基準，無目標時用最近敵人
+    let baseAngle = this.state.playerFacingAngle
+    const nearest = this.findNearestEnemy(player.position)
+    if (nearest) {
+      baseAngle = Math.atan2(
+        nearest.position.y - player.position.y,
+        nearest.position.x - player.position.x,
+      )
+    }
 
     for (let i = 0; i < count; i++) {
       const b = beams[i]
-
-      // 找尚未被其他光束鎖定的最近敵人
-      let target: Entity | null = null
-      let minDist = Infinity
-      for (const enemy of enemies) {
-        if (enemy.hp <= 0) continue
-        if (usedEnemies.has(enemy.id)) continue
-        const dist = this.distance(player.position, enemy.position)
-        if (dist < minDist) {
-          minDist = dist
-          target = enemy
-        }
-      }
-
-      let angle = i * (Math.PI * 2 / count) // 預設均分方向
-      if (target) {
-        angle = Math.atan2(
-          target.position.y - player.position.y,
-          target.position.x - player.position.x,
-        )
-        usedEnemies.add(target.id)
-      }
+      // 雙線掃射：奇偶索引對應 ±15°
+      const angle = count >= 2
+        ? baseAngle + (i % 2 === 0 ? -1 : 1) * (15 * Math.PI / 180)
+        : baseAngle
 
       this.state.beamEffects.push({
         id: this.genId(),
         origin: { x: player.position.x, y: player.position.y },
         angle,
-        range: snapshot.range,
+        range: this.effRange(snapshot.range),
         width: b.width,
-        dps: b.dps,
+        pulseDamage: b.pulseDamage,
+        pulseInterval: snapshot.pulseInterval,
+        singleShot: b.singleShot,
         createdAt: now,
         duration: snapshot.duration * 1000,
+        hasKnockback: b.hasKnockback,
         hasRefraction: b.hasRefraction,
         refractionWidth: b.refractionWidth,
         hasFocusBurn: b.hasFocusBurn,
         hasPrismSplit: b.hasPrismSplit,
-        isPulseMode: b.isPulseMode,
+        hasOverloadTail: b.hasOverloadTail,
         hasBurningTrail: b.hasBurningTrail,
         hasOverload: b.hasOverload,
         focusAccum: new Map(),
@@ -1212,138 +1316,90 @@ export class GameEngine {
     }
   }
 
-  /** 更新光束效果：每幀對矩形範圍內敵人施加 DPS（含折射/聚焦/稜鏡/脈衝/過載/殘影） */
-  private updateBeamEffects(dt: number) {
+  /** 更新光束效果：v3 脈衝制，每 pulseInterval 對範圍內敵人施加脈衝傷害 */
+  private updateBeamEffects(_dt: number) {
     const now = performance.now()
 
     for (const beam of this.state.beamEffects) {
       const elapsed = now - beam.createdAt
 
-      // ── 光束到期 → 產生殘影 ──
       if (elapsed >= beam.duration) {
-        if (beam.hasBurningTrail) {
-          this.spawnBeamTrail(beam)
-        }
+        if (beam.hasBurningTrail) this.spawnBeamTrail(beam)
         continue
       }
 
-      // ── 能量過載：最後 0.5s 傷害 ×3、寬度 ×2 ──
       const timeRemaining = beam.duration - elapsed
       const isOverloaded = beam.hasOverload && timeRemaining <= 500
-      const dpsMul = isOverloaded ? 3 : 1
+      const isOverloadTail = beam.hasOverloadTail && timeRemaining <= 500
+      const dmgMul = (isOverloaded ? 3 : 1) * (isOverloadTail ? 2 : 1)
       const widthMul = isOverloaded ? 2 : 1
-      const effectiveDps = beam.dps * dpsMul
+      const effectivePulseDmg = beam.pulseDamage * dmgMul
       const effectiveWidth = beam.width * widthMul
 
-      // 清除上一幀的子光束段
       beam.childSegments = []
 
-      if (beam.isPulseMode) {
-        // ── 脈衝模式 ──
-        if (now - beam.lastPulseTime >= 300) {
-          beam.lastPulseTime = now
+      const shouldFire = beam.singleShot
+        ? !beam.initialDamageApplied
+        : now - beam.lastPulseTime >= beam.pulseInterval
 
-          // 每次脈衝重新瞄準最近敵人
-          const target = this.findNearestEnemy(beam.origin)
-          if (target) {
-            beam.angle = Math.atan2(
-              target.position.y - beam.origin.y,
-              target.position.x - beam.origin.x,
-            )
-          }
+      if (shouldFire) {
+        if (beam.singleShot) beam.initialDamageApplied = true
+        else beam.lastPulseTime = now
 
-          const pulseDmg = effectiveDps * 0.5
-
-          // 主光束脈衝命中
-          const mainHits = this.getEnemiesInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
-          for (const enemy of mainHits) {
-            this.applyBeamPulseDamage(enemy, pulseDmg, beam.origin, now)
-          }
-
-          // 折射子光束脈衝
-          if (beam.hasRefraction && mainHits.length > 0) {
-            const firstHit = this.findFirstEnemyInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
-            if (firstHit) {
-              const refWidth = beam.refractionWidth * widthMul
-              const segs = this.computeRefractionSegments(firstHit, beam.range, refWidth, effectiveDps * 0.7)
-              beam.childSegments.push(...segs)
-              for (const seg of segs) {
-                const segHits = this.getEnemiesInBeam(seg.origin, seg.angle, seg.range, seg.width)
-                for (const enemy of segHits) {
-                  this.applyBeamPulseDamage(enemy, seg.dps * 0.5, seg.origin, now)
-                }
-              }
-            }
-          }
-
-          // 稜鏡分解子光束脈衝
-          if (beam.hasPrismSplit) {
-            const firstHit = this.findFirstEnemyInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
-            if (firstHit) {
-              const segs = this.computePrismSegments(firstHit, beam.angle, beam.range, effectiveWidth, effectiveDps)
-              beam.childSegments.push(...segs)
-              this.applyPrismDamage(segs, true, now)
-            }
-          }
+        const target = this.findNearestEnemy(beam.origin)
+        if (target) {
+          beam.angle = Math.atan2(
+            target.position.y - beam.origin.y,
+            target.position.x - beam.origin.x,
+          )
         }
-      } else {
-        // ── 持續照射模式 ──
-        const currentlyHit = new Set<string>()
-        let firstHitEnemy: Entity | null = null
-        let firstHitAlong = Infinity
 
-        for (const enemy of this.state.enemies) {
-          if (enemy.hp <= 0) continue
-          const { hit, along } = this.beamHitTest(beam.origin, beam.angle, beam.range, effectiveWidth, enemy)
-          if (!hit) continue
-
-          currentlyHit.add(enemy.id)
-          if (along < firstHitAlong) {
-            firstHitAlong = along
-            firstHitEnemy = enemy
-          }
-
-          // 聚焦灼燒倍率
+        const mainHits = this.getEnemiesInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
+        for (const enemy of mainHits) {
           let focusMul = 1
           if (beam.hasFocusBurn) {
             const accum = beam.focusAccum.get(enemy.id) ?? 0
             focusMul = Math.min(2.5, 1 + 0.15 * (accum / 1000))
-            beam.focusAccum.set(enemy.id, accum + dt * 1000)
+            beam.focusAccum.set(enemy.id, accum + beam.pulseInterval)
           }
-
-          const dmg = effectiveDps * focusMul * dt
-          enemy.hp -= dmg
-          enemy.burnDps = effectiveDps * focusMul
-          enemy.burnUntil = now + 500
-
-          if (enemy.hp <= 0) {
-            this.spawnDamageNumber(enemy.position, Math.round(dmg), '#FFAB40')
-            this.handleEnemyDeath(enemy)
-          }
+          this.applyBeamPulseDamage(
+            enemy,
+            effectivePulseDmg * focusMul,
+            beam.origin,
+            now,
+            beam.hasKnockback,
+          )
         }
-
-        // 重置未被照射敵人的聚焦累計
         if (beam.hasFocusBurn) {
           for (const [id] of beam.focusAccum) {
-            if (!currentlyHit.has(id)) beam.focusAccum.delete(id)
+            if (!mainHits.some((e) => e.id === id)) beam.focusAccum.delete(id)
           }
         }
 
-        // 折射光束
-        if (beam.hasRefraction && firstHitEnemy) {
-          const refWidth = beam.refractionWidth * widthMul
-          const segs = this.computeRefractionSegments(firstHitEnemy, beam.range, refWidth, effectiveDps * 0.7)
-          beam.childSegments.push(...segs)
-          for (const seg of segs) {
-            this.applyBeamSegmentDamage(seg, dt, now)
+        if (beam.hasRefraction && mainHits.length > 0) {
+          const firstHit = this.findFirstEnemyInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
+          if (firstHit) {
+            const refWidth = beam.refractionWidth * widthMul
+            const refPulse = Math.round(beam.pulseDamage * 0.7 * dmgMul)
+            const segs = this.computeRefractionSegments(firstHit, beam.range, refWidth, refPulse)
+            beam.childSegments.push(...segs)
+            for (const seg of segs) {
+              const segHits = this.getEnemiesInBeam(seg.origin, seg.angle, seg.range, seg.width)
+              for (const enemy of segHits) {
+                this.applyBeamPulseDamage(enemy, seg.pulseDamage, seg.origin, now, beam.hasKnockback)
+              }
+            }
           }
         }
 
-        // 稜鏡分解
-        if (beam.hasPrismSplit && firstHitEnemy) {
-          const segs = this.computePrismSegments(firstHitEnemy, beam.angle, beam.range, effectiveWidth, effectiveDps)
-          beam.childSegments.push(...segs)
-          this.applyPrismDamage(segs, false, now, dt)
+        if (beam.hasPrismSplit) {
+          const firstHit = this.findFirstEnemyInBeam(beam.origin, beam.angle, beam.range, effectiveWidth)
+          if (firstHit) {
+            const prismPulse = Math.round(beam.pulseDamage * 0.4 * dmgMul)
+            const segs = this.computePrismSegments(firstHit, beam.angle, beam.range, effectiveWidth, prismPulse)
+            beam.childSegments.push(...segs)
+            this.applyPrismPulseDamage(segs, now)
+          }
         }
       }
     }
@@ -1401,7 +1457,7 @@ export class GameEngine {
 
   /** 計算折射子光束段（從 startEnemy 向 200px 內最近敵人折射，最多 2 次） */
   private computeRefractionSegments(
-    startEnemy: Entity, _range: number, width: number, refrDps: number,
+    startEnemy: Entity, _range: number, width: number, refrPulseDamage: number,
   ): BeamSegment[] {
     const segments: BeamSegment[] = []
     let currentPos = startEnemy.position
@@ -1429,7 +1485,7 @@ export class GameEngine {
         angle,
         range: minDist + nearest.size + 20,
         width,
-        dps: refrDps,
+        pulseDamage: refrPulseDamage,
       })
 
       usedEnemies.add(nearest.id)
@@ -1438,12 +1494,11 @@ export class GameEngine {
     return segments
   }
 
-  /** 計算稜鏡分解子光束段（從首個敵人分 3 道，30° 扇形，各 40% 傷害） */
+  /** 計算稜鏡分解子光束段（從首個敵人分 3 道，30° 扇形，各 40% 脈衝傷害） */
   private computePrismSegments(
-    hitEnemy: Entity, mainAngle: number, range: number, mainWidth: number, baseDps: number,
+    hitEnemy: Entity, mainAngle: number, range: number, mainWidth: number, childPulseDamage: number,
   ): BeamSegment[] {
     const childWidth = mainWidth / 3
-    const childDps = baseDps * 0.4
     const spreadRad = (30 * Math.PI) / 180
     const segments: BeamSegment[] = []
 
@@ -1454,34 +1509,34 @@ export class GameEngine {
         angle: mainAngle + offset,
         range,
         width: childWidth,
-        dps: childDps,
+        pulseDamage: childPulseDamage,
       })
     }
     return segments
   }
 
-  /** 套用稜鏡子光束傷害（含三道同時命中 ×1.5 加成） */
-  private applyPrismDamage(segs: BeamSegment[], isPulse: boolean, now: number, dt = 0) {
-    const hitPerEnemy = new Map<string, { count: number; totalDps: number }>()
+  /** 套用稜鏡子光束脈衝傷害（三道同時命中同目標 ×1.5） */
+  private applyPrismPulseDamage(segs: BeamSegment[], now: number) {
+    const hitPerEnemy = new Map<string, { count: number; totalPulse: number }>()
 
     for (const seg of segs) {
       for (const enemy of this.state.enemies) {
         if (enemy.hp <= 0) continue
         if (!this.beamHitTest(seg.origin, seg.angle, seg.range, seg.width, enemy).hit) continue
-        const entry = hitPerEnemy.get(enemy.id) ?? { count: 0, totalDps: 0 }
+        const entry = hitPerEnemy.get(enemy.id) ?? { count: 0, totalPulse: 0 }
         entry.count++
-        entry.totalDps += seg.dps
+        entry.totalPulse += seg.pulseDamage
         hitPerEnemy.set(enemy.id, entry)
       }
     }
 
-    for (const [enemyId, { count, totalDps }] of hitPerEnemy) {
+    for (const [enemyId, { count, totalPulse }] of hitPerEnemy) {
       const enemy = this.state.enemies.find((e) => e.id === enemyId)
       if (!enemy || enemy.hp <= 0) continue
       const mul = count >= 3 ? 1.5 : 1
-      const dmg = isPulse ? totalDps * 0.5 * mul : totalDps * dt * mul
+      const dmg = totalPulse * mul
       enemy.hp -= dmg
-      enemy.burnDps = totalDps * mul
+      enemy.burnDps = totalPulse * mul * (1000 / 250)
       enemy.burnUntil = now + 500
 
       if (enemy.hp <= 0) {
@@ -1491,39 +1546,29 @@ export class GameEngine {
     }
   }
 
-  /** 套用光束子段持續傷害（折射用） */
-  private applyBeamSegmentDamage(seg: BeamSegment, dt: number, now: number) {
-    for (const enemy of this.state.enemies) {
-      if (enemy.hp <= 0) continue
-      if (!this.beamHitTest(seg.origin, seg.angle, seg.range, seg.width, enemy).hit) continue
-      const dmg = seg.dps * dt
-      enemy.hp -= dmg
-      enemy.burnDps = seg.dps
-      enemy.burnUntil = now + 500
-
-      if (enemy.hp <= 0) {
-        this.spawnDamageNumber(enemy.position, Math.round(dmg), '#FFAB40')
-        this.handleEnemyDeath(enemy)
-      }
-    }
-  }
-
-  /** 脈衝模式：對敵人施加瞬間傷害 + 50px 擊退 */
-  private applyBeamPulseDamage(enemy: Entity, damage: number, beamOrigin: Position, now: number) {
+  /** 脈衝傷害：對敵人施加瞬間傷害，可選擊退 50px */
+  private applyBeamPulseDamage(
+    enemy: Entity,
+    damage: number,
+    beamOrigin: Position,
+    now: number,
+    knockback = false,
+  ) {
     enemy.hp -= damage
     this.spawnDamageNumber(enemy.position, Math.round(damage), '#FFAB40')
 
-    // 50px 擊退
-    const knockAngle = Math.atan2(
-      enemy.position.y - beamOrigin.y,
-      enemy.position.x - beamOrigin.x,
-    )
-    enemy.position.x += Math.cos(knockAngle) * 50
-    enemy.position.y += Math.sin(knockAngle) * 50
-    enemy.position.x = Math.max(enemy.size, Math.min(this.state.canvasWidth - enemy.size, enemy.position.x))
-    enemy.position.y = Math.max(enemy.size, Math.min(this.state.canvasHeight - enemy.size, enemy.position.y))
+    if (knockback) {
+      const knockAngle = Math.atan2(
+        enemy.position.y - beamOrigin.y,
+        enemy.position.x - beamOrigin.x,
+      )
+      enemy.position.x += Math.cos(knockAngle) * 50
+      enemy.position.y += Math.sin(knockAngle) * 50
+      enemy.position.x = Math.max(enemy.size, Math.min(this.state.canvasWidth - enemy.size, enemy.position.x))
+      enemy.position.y = Math.max(enemy.size, Math.min(this.state.canvasHeight - enemy.size, enemy.position.y))
+    }
 
-    enemy.burnDps = damage * 2
+    enemy.burnDps = damage * (1000 / 250)
     enemy.burnUntil = now + 500
 
     if (enemy.hp <= 0) {
@@ -1531,29 +1576,33 @@ export class GameEngine {
     }
   }
 
-  /** 產生光束殘影（灼熱殘影金卡） */
+  /** 產生光束殘影（灼熱殘影金卡，30%/s 灼傷） */
   private spawnBeamTrail(beam: BeamEffect) {
     const now = performance.now()
-    // 主光束殘影
+    const effectiveDps = beam.singleShot
+      ? beam.pulseDamage * 0.3
+      : beam.pulseDamage * (1000 / beam.pulseInterval) * 0.3
     this.state.beamTrails.push({
       id: this.genId(),
       origin: { x: beam.origin.x, y: beam.origin.y },
       angle: beam.angle,
       range: beam.range,
       width: beam.width,
-      dps: beam.dps * 0.3,
+      dps: effectiveDps,
       createdAt: now,
       duration: 2000,
     })
-    // 子光束殘影
     for (const seg of beam.childSegments) {
+      const segDps = beam.singleShot
+        ? seg.pulseDamage * 0.3
+        : seg.pulseDamage * (1000 / beam.pulseInterval) * 0.3
       this.state.beamTrails.push({
         id: this.genId(),
         origin: { x: seg.origin.x, y: seg.origin.y },
         angle: seg.angle,
         range: seg.range,
         width: seg.width,
-        dps: seg.dps * 0.3,
+        dps: segDps,
         createdAt: now,
         duration: 2000,
       })
@@ -1588,78 +1637,168 @@ export class GameEngine {
     )
   }
 
-  /** 清理過期冰錐效果 */
-  private updateIceSpikeEffects() {
+  /** 更新凍土扇形區域：每幀 DoT + 減速 + 永凍 + 共振 */
+  private updateIceSpikeEffects(dt: number) {
     const now = performance.now()
+    const snapshot = this.iceSpikeSnapshot
+
+    for (const zone of this.state.iceSpikeEffects) {
+      const elapsed = now - zone.createdAt
+      if (elapsed >= zone.duration) continue
+
+      zone.hitEnemies.clear()
+      const radius = zone.radius
+
+      for (const enemy of this.state.enemies) {
+        if (enemy.hp <= 0) continue
+        if (!this.isPointInSector(zone.origin, zone.direction, zone.arcAngle, radius, enemy.position, zone.isCage)) continue
+
+        zone.hitEnemies.add(enemy.id)
+
+        if (zone.firstDamageTime == null) zone.firstDamageTime = now
+
+        const isSlow = enemy.slowUntil > 0 && now < enemy.slowUntil
+        let actualDps = zone.dps
+        if (snapshot?.hasPermafrost && isSlow) {
+          enemy.frozenUntil = now + 1500
+          enemy.frozenDamage = 0
+        }
+        if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) {
+          actualDps = zone.dps * 1.25
+        }
+
+        const dmg = actualDps * dt
+        enemy.hp -= dmg
+        enemy.slowUntil = now + 2000
+
+        if (enemy.hp <= 0) {
+          this.handleEnemyDeath(enemy)
+        }
+      }
+
+      const zoneHasShardSplash = zone.hasShardSplash ?? snapshot?.hasShardSplash
+      if (zone.hitEnemies.size > 0 && zoneHasShardSplash) {
+        const last = zone.lastShardSplashTime ?? 0
+        if (now - last >= 250) {
+          zone.lastShardSplashTime = now
+          this.spawnFrozenGroundShards(zone.origin, zone.dps * 0.2)
+        }
+      }
+
+      const zoneHasDoubleHit = zone.hasDoubleHit ?? snapshot?.hasDoubleHit
+      if (zone.firstDamageTime != null && !zone.doubleHitDone && zoneHasDoubleHit && now - zone.firstDamageTime >= 500) {
+        zone.doubleHitDone = true
+        const burstDmg = zone.dps * 2
+        for (const enemy of this.state.enemies) {
+          if (enemy.hp <= 0) continue
+          if (!this.isPointInSector(zone.origin, zone.direction, zone.arcAngle, zone.radius, enemy.position, zone.isCage)) continue
+          enemy.hp -= burstDmg
+          enemy.slowUntil = now + 2000
+          this.spawnDamageNumber(enemy.position, Math.round(burstDmg), '#80DEEA')
+          if (enemy.hp <= 0) this.handleEnemyDeath(enemy)
+        }
+        zone.doubleHitFlashUntil = now + 200
+      }
+
+      if (zone.hitEnemies.size >= 3 && snapshot?.hasResonance && !zone.resonanceTriggered) {
+        zone.resonanceTriggered = true
+        this.spawnResonanceWave(zone.origin, zone.dps * 2)
+      }
+    }
+
+    this.updateFrozenGroundShards(dt)
+
     this.state.iceSpikeEffects = this.state.iceSpikeEffects.filter(
       (e) => now - e.createdAt < e.duration,
     )
   }
 
-  /** 地雷近距離偵測 → 觸發 */
+  private spawnFrozenGroundShards(origin: Position, damage: number) {
+    const speed = 150
+    for (let i = 0; i < 2; i++) {
+      const angle = (Math.PI * 2 / 2) * i + Math.random() * 0.5
+      this.state.frozenGroundShards.push({
+        id: this.genId(),
+        position: { ...origin },
+        velocity: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
+        damage,
+        traveled: 0,
+        maxDistance: 60,
+        createdAt: performance.now(),
+      })
+    }
+  }
+
+  private updateFrozenGroundShards(dt: number) {
+    const now = performance.now()
+    for (const shard of this.state.frozenGroundShards) {
+      const dx = shard.velocity.x * dt
+      const dy = shard.velocity.y * dt
+      shard.position.x += dx
+      shard.position.y += dy
+      shard.traveled += Math.sqrt(dx * dx + dy * dy)
+
+      if (shard.traveled >= shard.maxDistance) continue
+
+      for (const enemy of this.state.enemies) {
+        if (enemy.hp <= 0) continue
+        const d = Math.sqrt((enemy.position.x - shard.position.x) ** 2 + (enemy.position.y - shard.position.y) ** 2)
+        if (d < enemy.size + 8) {
+          enemy.hp -= shard.damage
+          enemy.slowUntil = now + 2000
+          shard.traveled = shard.maxDistance
+          if (enemy.hp <= 0) this.handleEnemyDeath(enemy)
+          break
+        }
+      }
+    }
+    this.state.frozenGroundShards = this.state.frozenGroundShards.filter((s) => s.traveled < s.maxDistance)
+  }
+
+  /** 地雷近距離偵測 → 觸發生成凍土區域 */
   private updateIceSpikeMines() {
     const now = performance.now()
     const snapshot = this.iceSpikeSnapshot
 
     for (const mine of this.state.iceSpikeMines) {
-      // 過期移除
       if (now - mine.createdAt > mine.duration) {
         mine.triggered = true
-        mine.triggerTime = now - 500 // 讓它被清掉
+        mine.triggerTime = now - 500
         continue
       }
-
       if (mine.triggered) continue
 
-      // 偵測敵人踏入
       for (const enemy of this.state.enemies) {
         if (enemy.hp <= 0) continue
         const dist = this.distance(mine.position, enemy.position)
         if (dist < mine.detectRadius + enemy.size) {
           mine.triggered = true
           mine.triggerTime = now
-
-          // 施加失溫
-          enemy.slowUntil = now + 2000
-
-          // 永凍結晶檢查
-          const isSlow = enemy.slowUntil > 0 && now < enemy.slowUntil
-          let actualDmg = mine.damage
-          if (snapshot?.hasPermafrost && isSlow) {
-            enemy.frozenUntil = now + 1500
-            enemy.frozenDamage = 0
+          if (snapshot) {
+            const { spreadIsMine, spreadHasDoubleHit, spreadHasShardSplash } = snapshot
+            if (spreadIsMine && !mine.isCage) {
+              const mainArc = 90
+              const spreadArc = 25
+              const baseDps = Math.round(mine.dps / 1.5)
+              const spreadDps = Math.round(baseDps * 0.5)
+              const toRad = (deg: number) => (deg * Math.PI) / 180
+              const mainDir = mine.direction
+              const leftDir = mainDir - toRad((mainArc + spreadArc) / 2)
+              const rightDir = mainDir + toRad((mainArc + spreadArc) / 2)
+              this.spawnFrozenGroundZone(mine.position, mainDir, mainArc, mine.radius, mine.dps, mine.slowRate, 4000, mine.isCage, true, snapshot.hasDoubleHit, snapshot.hasShardSplash)
+              this.spawnFrozenGroundZone(mine.position, leftDir, spreadArc, mine.radius, spreadDps, mine.slowRate, 4000, mine.isCage, true, spreadHasDoubleHit, spreadHasShardSplash, true)
+              this.spawnFrozenGroundZone(mine.position, rightDir, spreadArc, mine.radius, spreadDps, mine.slowRate, 4000, mine.isCage, true, spreadHasDoubleHit, spreadHasShardSplash, true)
+            } else {
+              this.spawnFrozenGroundZone(mine.position, mine.direction, mine.arcAngle, mine.radius, mine.dps, mine.slowRate, 4000, mine.isCage, true, snapshot.hasDoubleHit, snapshot.hasShardSplash)
+            }
           }
-          if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) {
-            actualDmg = Math.round(mine.damage * 1.25)
-          }
-
-          enemy.hp -= actualDmg
-          this.spawnDamageNumber(enemy.position, actualDmg)
-
-          if (enemy.hp <= 0) {
-            this.handleEnemyDeath(enemy)
-          }
-
-          // 觸發視覺
-          this.state.iceSpikeEffects.push({
-            id: this.genId(),
-            pillarPositions: [{ ...mine.position }],
-            spreadPillarPositions: [],
-            damage: actualDmg,
-            spreadDamage: 0,
-            isCage: false,
-            createdAt: now,
-            duration: 400,
-            hitEnemies: new Set([enemy.id]),
-          })
           break
         }
       }
     }
 
-    // 清理已觸發超過動畫時間 或 過期的地雷
     this.state.iceSpikeMines = this.state.iceSpikeMines.filter(
-      (m) => !m.triggered || (now - m.triggerTime < 400),
+      (m) => !m.triggered || now - m.triggerTime < 100,
     )
   }
 
@@ -1748,9 +1887,24 @@ export class GameEngine {
           proj.hitEnemies.add(enemy.id)
           this.spawnDamageNumber(enemy.position, proj.damage)
 
-          // 寒霜聚合追蹤
+          // 失溫效果：冰箭機率觸發（基礎 15% + chillChanceBonus），減速 2 秒
+          if (proj.skillId === 'ice-arrow') {
+            const baseChill = 0.15
+            const chillChance = baseChill + (proj.chillChanceBonus ?? 0)
+            if (Math.random() < chillChance) {
+              enemy.slowUntil = Math.max(enemy.slowUntil ?? 0, performance.now() + 2000)
+            }
+          }
+
+          // 寒霜聚合追蹤（主箭或碎冰命中，hitCount=1）
           if (proj.hasConvergence) {
-            this.trackConvergence(enemy, proj.damage)
+            this.trackConvergence(enemy, proj.damage, 1)
+          }
+
+          // 碎冰彈幕：命中時射出 2 顆微型碎冰（各 15% 傷害）
+          if (proj.hasShardBarrage && proj.skillId === 'ice-arrow') {
+            const shards = this.spawnShardBarrageFragments(proj, enemy.id)
+            newProjectiles.push(...shards)
           }
 
           // 擊殺判定
@@ -1865,8 +2019,48 @@ export class GameEngine {
         hasTracking: false,
         trackingTurnSpeed: 0,
         hasColdZone: parent.hasColdZone,
-        hasConvergence: false,
+        hasConvergence: parent.hasConvergence,
         hasChainExplosion: parent.hasChainExplosion,
+        hasShardBarrage: false,
+        chillChanceBonus: parent.chillChanceBonus ?? 0,
+        chainDepth: parent.chainDepth,
+        hitEnemies: new Set([hitEnemyId]),
+        alive: true,
+      })
+    }
+
+    return fragments
+  }
+
+  /** 碎冰彈幕：產生 2 顆微型碎冰（各 15% 傷害，±45°） */
+  private spawnShardBarrageFragments(parent: Projectile, hitEnemyId: string): Projectile[] {
+    const fragments: Projectile[] = []
+    const baseAngle = Math.atan2(parent.velocity.y, parent.velocity.x)
+    const shardDamage = Math.max(1, Math.round(parent.damage * 0.15))
+    const shardSpeed = parent.speed * 0.6
+
+    for (const offsetDeg of [-45, 45]) {
+      const angle = baseAngle + (offsetDeg * Math.PI) / 180
+      fragments.push({
+        id: this.genId(),
+        skillId: parent.skillId,
+        position: { x: parent.position.x, y: parent.position.y },
+        velocity: { x: Math.cos(angle) * shardSpeed, y: Math.sin(angle) * shardSpeed },
+        damage: shardDamage,
+        speed: shardSpeed,
+        pierceCount: 0,
+        hasSplit: false,
+        splitDamageRatio: 0,
+        splitCount: 0,
+        splitAngle: 0,
+        isFragment: true,
+        hasTracking: false,
+        trackingTurnSpeed: 0,
+        hasColdZone: parent.hasColdZone,
+        hasConvergence: parent.hasConvergence,
+        hasChainExplosion: parent.hasChainExplosion,
+        hasShardBarrage: false,
+        chillChanceBonus: parent.chillChanceBonus ?? 0,
         chainDepth: parent.chainDepth,
         hitEnemies: new Set([hitEnemyId]),
         alive: true,
@@ -1888,18 +2082,19 @@ export class GameEngine {
     })
   }
 
-  /** 寒霜聚合：追蹤命中紀錄，3+ 次在 0.5s 內觸發冰封 */
-  private trackConvergence(enemy: Entity, damage: number) {
+  /** 寒霜聚合：追蹤命中紀錄，3+ 支冰箭在 0.5s 內擊中同一敵人觸發冰封 */
+  private trackConvergence(enemy: Entity, damage: number, hitCount = 1) {
     if (enemy.frozenUntil > 0 && performance.now() < enemy.frozenUntil) return
 
     const now = performance.now()
     const record = this.convergenceTracker.get(enemy.id) ?? []
-    record.push({ time: now, damage })
+    record.push({ time: now, damage, hitCount })
 
     const recent = record.filter((r) => now - r.time < 500)
     this.convergenceTracker.set(enemy.id, recent)
 
-    if (recent.length >= 3) {
+    const totalHits = recent.reduce((sum, r) => sum + r.hitCount, 0)
+    if (totalHits >= 3) {
       const accDamage = recent.reduce((sum, r) => sum + r.damage, 0)
       enemy.frozenUntil = now + 2000
       enemy.frozenDamage = Math.round(accDamage * 0.5)
@@ -1951,6 +2146,8 @@ export class GameEngine {
         hasColdZone: proj.hasColdZone,
         hasConvergence: false,
         hasChainExplosion: true,
+        hasShardBarrage: false,
+        chillChanceBonus: 0,
         chainDepth: proj.chainDepth + 1,
         hitEnemies: new Set([hitEnemyId]),
         alive: true,
@@ -2064,6 +2261,7 @@ export class GameEngine {
     this.state.coldZones = []
     this.state.iceSpikeEffects = []
     this.state.iceSpikeMines = []
+    this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireballProjectiles = []
     this.state.fireExplosions = []
@@ -2088,6 +2286,7 @@ export class GameEngine {
     }
     this.convergenceTracker.clear()
     this.state.iceSpikeMines = []
+    this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireballProjectiles = []
     this.state.fireExplosions = []

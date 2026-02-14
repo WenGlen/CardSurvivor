@@ -1,3 +1,14 @@
+import {
+  ICE_ARROW_BASE,
+  ICE_SPIKE_BASE,
+  FIREBALL_BASE,
+  BEAM_BASE,
+  ICE_ARROW_CARD,
+  ICE_SPIKE_CARD,
+  FIREBALL_CARD,
+  BEAM_CARD,
+} from '../config'
+
 /** 卡片稀有度 */
 export type CardRarity = 'bronze' | 'silver' | 'gold'
 
@@ -11,7 +22,7 @@ export interface CardDefinition {
   orderNote: string
 }
 
-/** 單支冰箭的實例快照 */
+/** 單支冰箭的實例快照（CardsDetail-v3） */
 export interface ArrowInstance {
   damage: number
   speed: number
@@ -26,111 +37,135 @@ export interface ArrowInstance {
   hasColdZone: boolean
   hasConvergence: boolean
   hasChainExplosion: boolean
+  /** 銀卡：碎冰彈幕，命中時射出 2 顆微型碎冰（各 15%） */
+  hasShardBarrage: boolean
+  /** 銅卡：失溫增幅，觸發失溫機率 +30% */
+  chillChanceBonus: number
 }
 
 /** 冰箭技能的完整快照（經卡片堆疊計算後） */
 export interface IceArrowSnapshot {
   cooldown: number
+  /** 發射方式：360° 均分（主方向=最近敵人），spreadAngle 保留供未來卡片擴展 */
   spreadAngle: number
   arrows: ArrowInstance[]
 }
 
-/** 冰箭初始單支箭實例 */
-const BASE_ARROW: ArrowInstance = {
-  damage: 12,
-  speed: 220,
-  pierceCount: 0,
-  hasSplit: false,
-  splitDamageRatio: 0.6,
-  splitCount: 2,
-  splitAngle: 45,
-  isFragment: false,
-  hasTracking: false,
-  trackingTurnSpeed: 0,
-  hasColdZone: false,
-  hasConvergence: false,
-  hasChainExplosion: false,
+/** 取得用於強化碎片「數量」的初始箭（深拷貝） */
+export function getBaseArrowForExtra(): ArrowInstance {
+  return {
+    damage: ICE_ARROW_BASE.damage,
+    speed: ICE_ARROW_BASE.speed,
+    pierceCount: ICE_ARROW_BASE.pierceCount,
+    hasSplit: false,
+    splitDamageRatio: ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio,
+    splitCount: 2,
+    splitAngle: 45,
+    isFragment: false,
+    hasTracking: false,
+    trackingTurnSpeed: 0,
+    hasColdZone: false,
+    hasConvergence: false,
+    hasChainExplosion: false,
+    hasShardBarrage: false,
+    chillChanceBonus: 0,
+  }
 }
 
-// ── 冰箭卡片定義 ──
+/** 冰箭初始單支箭實例 */
+const BASE_ARROW: ArrowInstance = {
+  ...getBaseArrowForExtra(),
+}
+
+// ── 冰箭卡片定義（CardsDetail-v3：無純數值卡，銅銀金分層）──
 
 export const iceArrowCards: CardDefinition[] = [
+  // 銅卡：玩法改變・總值不變・未來不套用
   {
-    id: 'ice-arrow-count-2',
-    name: '冰箭數量 +2',
+    id: 'ice-arrow-tracking',
+    name: '追蹤冰晶',
     skillId: 'ice-arrow',
     rarity: 'bronze',
-    description: '新增 2 支初始數值的冰箭，散射角度自動均分',
-    orderNote: '放在行為卡之後，新增的箭不繼承之前的行為效果',
+    description: `微幅自動追蹤（${ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed}°/s），飛行速度降低 ${Math.round((1 - ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier) * 100)}%`,
+    orderNote: '爆發產生的碎片不追蹤；金卡極寒領域讓碎片擊中也產生寒氣',
   },
+  {
+    id: 'ice-arrow-chill-boost',
+    name: '失溫增幅',
+    skillId: 'ice-arrow',
+    rarity: 'bronze',
+    description: `觸發失溫的機率 +${Math.round(ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus * 100)}%`,
+    orderNote: '分裂→失溫：母箭與碎片都可高機率失溫；失溫→分裂：只有母箭',
+  },
+  // 銀卡：總傷害增加・未來不套用
   {
     id: 'ice-arrow-pierce',
     name: '寒冰穿刺',
     skillId: 'ice-arrow',
-    rarity: 'bronze',
-    description: '所有現有冰箭穿透 +1，穿透時傷害不衰減',
+    rarity: 'silver',
+    description: '所有現有冰箭穿透 +1，穿透時傷害不衰減（最高可達約兩倍傷害）',
     orderNote: '只影響放入此卡時已存在的冰箭',
-  },
-  {
-    id: 'ice-arrow-cooldown',
-    name: '冰箭冷卻 -0.2s',
-    skillId: 'ice-arrow',
-    rarity: 'bronze',
-    description: '整體冷卻時間縮短 0.2 秒（可疊加，最低 0.3s）',
-    orderNote: '不受順序影響，疊加多張效果累積',
   },
   {
     id: 'ice-arrow-split',
     name: '冰晶分裂',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: '所有現有冰箭穿透敵人後，分裂成 2 支小冰箭（60% 傷害，±45°）',
-    orderNote: '需搭配穿透才能觸發；先穿後分 vs 先分後穿效果不同',
+    description: `穿透敵人後分裂成 2 支小冰箭（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio * 100)}% 傷害），主箭命中 + 碎片 = 總傷害增加`,
+    orderNote: '穿刺→分裂：碎片不穿透；分裂→穿刺：只有母箭穿透',
+  },
+  {
+    id: 'ice-arrow-burst',
+    name: '冰晶爆發',
+    skillId: 'ice-arrow',
+    rarity: 'silver',
+    description: `穿透後分裂成 2 支小箭（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio * 100)}% 傷害），總傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio * 2 * 100)}%`,
+    orderNote: '爆發是數量放大器：先拿則彈幕等「每支箭」效果作用於更多箭',
   },
   {
     id: 'ice-arrow-convergence',
     name: '寒霜聚合',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: '3 支以上冰箭在 0.5s 內擊中同一敵人 → 冰封 2s，結束時受累積傷害 50% 碎冰爆傷',
-    orderNote: '只作用於當前存在的冰箭；鼓勵收窄散射集火',
+    description: `${ICE_ARROW_CARD['ice-arrow-convergence'].requiredHitCount} 支以上冰箭 ${ICE_ARROW_CARD['ice-arrow-convergence'].convergeWindowMs / 1000}s 內擊中同一敵人 → 冰封 ${ICE_ARROW_CARD['ice-arrow-convergence'].freezeDurationMs / 1000}s，結束時受累積傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-convergence'].burstDamageRatio * 100)}% 碎冰爆傷`,
+    orderNote: '彈幕→聚合：微型碎冰計入；聚合→彈幕：只有主箭與分裂碎片計入',
   },
   {
-    id: 'ice-arrow-tracking',
-    name: '追蹤冰晶',
+    id: 'ice-arrow-shard-barrage',
+    name: '碎冰彈幕',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: '所有現有冰箭獲得微幅自動追蹤（轉向 30°/s），飛行速度降低 15%',
-    orderNote: '後拿的數量卡不繼承追蹤；速度降低會影響穿透距離',
+    description: `命中時射出 ${ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardCount} 顆微型碎冰（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardDamageRatio * 100)}% 傷害），總傷害 +${Math.round(ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardDamageRatio * ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardCount * 100)}%`,
+    orderNote: '爆發→彈幕：每支 60% 箭都帶碎冰；彈幕→爆發：只有母箭帶碎冰',
   },
+  // 金卡：未來效果也套用
   {
     id: 'ice-arrow-cold-zone',
     name: '極寒領域',
     skillId: 'ice-arrow',
     rarity: 'gold',
-    description: '所有冰箭（含未來新增）命中時產生寒氣區域（半徑 40px，1.5s），區域內敵人減速 30%',
-    orderNote: '金卡：不受順序影響，作用於所有現有及未來的冰箭',
+    description: `所有冰箭（含未來新增）命中時產生寒氣區域（${ICE_ARROW_CARD['ice-arrow-cold-zone'].coldZoneRadius}px，${ICE_ARROW_CARD['ice-arrow-cold-zone'].coldZoneDurationMs / 1000}s），減速 ${Math.round(ICE_ARROW_CARD['ice-arrow-cold-zone'].slowRate * 100)}%、冰傷 +${Math.round(ICE_ARROW_CARD['ice-arrow-cold-zone'].iceDmgBonus * 100)}%`,
+    orderNote: '金卡：分裂碎片、彈幕碎冰擊中皆產生寒氣區',
   },
   {
     id: 'ice-arrow-chain',
     name: '冰暴連鎖',
     skillId: 'ice-arrow',
     rarity: 'gold',
-    description: '所有冰箭擊殺敵人時爆裂成 3 支碎冰箭（40% 傷害），最多連鎖 3 次',
-    orderNote: '金卡：不受順序影響，作用於所有現有及未來的冰箭（含碎片）',
+    description: `擊殺時爆裂成 ${ICE_ARROW_CARD['ice-arrow-chain'].chainCount} 支碎冰箭（${Math.round(ICE_ARROW_CARD['ice-arrow-chain'].chainDamageRatio * 100)}% 傷害），最多連鎖 ${ICE_ARROW_CARD['ice-arrow-chain'].chainCount} 次`,
+    orderNote: '金卡：碎片擊殺也能觸發連鎖',
   },
 ]
 
 /**
- * 根據卡片序列計算冰箭快照
- * 核心機制：順序依賴堆疊（Sequential Stacking）
- * - 銅/銀卡：順序依賴，只影響「當下已存在」的箭
- * - 金卡：全局效果，不受順序影響，最後統一套用到所有箭
+ * 根據卡片序列計算冰箭快照（CardsDetail-v3）
+ * 銅/銀卡：順序依賴，只影響「當下已存在」的箭
+ * 金卡：全局效果，最後統一套用到所有箭
  */
 export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArrowSnapshot {
   const snapshot: IceArrowSnapshot = {
-    cooldown: 1.2,
-    spreadAngle: 30,
+    cooldown: ICE_ARROW_BASE.cooldown,
+    spreadAngle: ICE_ARROW_BASE.spreadAngle,
     arrows: [
       { ...BASE_ARROW },
       { ...BASE_ARROW },
@@ -138,16 +173,16 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
     ],
   }
 
-  // 分離金卡與順序依賴卡
   const sequentialCards = cardSequence.filter((c) => c.rarity !== 'gold')
   const goldCards = cardSequence.filter((c) => c.rarity === 'gold')
 
-  // 1. 依序處理銅/銀卡
   for (const card of sequentialCards) {
     switch (card.id) {
-      case 'ice-arrow-count-2':
-        snapshot.arrows.push({ ...BASE_ARROW })
-        snapshot.arrows.push({ ...BASE_ARROW })
+      case 'ice-arrow-split':
+        for (const arrow of snapshot.arrows) {
+          arrow.hasSplit = true
+          arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio
+        }
         break
 
       case 'ice-arrow-pierce':
@@ -156,13 +191,24 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
         }
         break
 
-      case 'ice-arrow-cooldown':
-        snapshot.cooldown = Math.max(0.3, snapshot.cooldown - 0.2)
+      case 'ice-arrow-tracking':
+        for (const arrow of snapshot.arrows) {
+          arrow.hasTracking = true
+          arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed
+          arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier)
+        }
         break
 
-      case 'ice-arrow-split':
+      case 'ice-arrow-chill-boost':
+        for (const arrow of snapshot.arrows) {
+          arrow.chillChanceBonus = ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus
+        }
+        break
+
+      case 'ice-arrow-burst':
         for (const arrow of snapshot.arrows) {
           arrow.hasSplit = true
+          arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio
         }
         break
 
@@ -172,17 +218,14 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
         }
         break
 
-      case 'ice-arrow-tracking':
+      case 'ice-arrow-shard-barrage':
         for (const arrow of snapshot.arrows) {
-          arrow.hasTracking = true
-          arrow.trackingTurnSpeed = 30
-          arrow.speed = Math.round(arrow.speed * 0.85)
+          arrow.hasShardBarrage = true
         }
         break
     }
   }
 
-  // 2. 統一套用金卡效果到所有箭（含數量卡新增的）
   for (const card of goldCards) {
     switch (card.id) {
       case 'ice-arrow-cold-zone':
@@ -202,172 +245,201 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
   return snapshot
 }
 
-// ── 冰錐卡片定義 ──
+/** 對單一陣列內的箭套用一張銅/銀卡效果（in-place） */
+export function applyIceArrowSequentialCardToArrows(card: CardDefinition, arrows: ArrowInstance[]): void {
+  for (const arrow of arrows) {
+    switch (card.id) {
+      case 'ice-arrow-split': arrow.hasSplit = true; arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio; break
+      case 'ice-arrow-pierce': arrow.pierceCount += 1; break
+      case 'ice-arrow-tracking': arrow.hasTracking = true; arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed; arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier); break
+      case 'ice-arrow-chill-boost': arrow.chillChanceBonus = ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus; break
+      case 'ice-arrow-burst': arrow.hasSplit = true; arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio; break
+      case 'ice-arrow-convergence': arrow.hasConvergence = true; break
+      case 'ice-arrow-shard-barrage': arrow.hasShardBarrage = true; break
+    }
+  }
+}
 
-/** 冰錐技能的完整快照（經卡片堆疊計算後） */
+/** 對單一箭套用一張金卡效果（in-place） */
+export function applyIceArrowGoldCardToArrow(card: CardDefinition, arrow: ArrowInstance): void {
+  switch (card.id) {
+    case 'ice-arrow-cold-zone': arrow.hasColdZone = true; break
+    case 'ice-arrow-chain': arrow.hasChainExplosion = true; break
+  }
+}
+
+// ── 凍土卡片定義（CardsDetail-v3）──
+
+/** 凍土技能的完整快照（經卡片堆疊計算後） */
 export interface IceSpikeSnapshot {
   cooldown: number
   arcAngle: number
   castRange: number
-  pillarCount: number
-  damage: number
+  duration: number
+  dps: number
+  slowRate: number
+  /** 銅卡：凍土追蹤 */
+  hasTracking: boolean
+  /** 銅卡：酷寒領域 */
+  isCage: boolean
+  /** 銀卡：凍土地雷 */
+  isMine: boolean
   /** 銀卡：凍土蔓延 */
   hasSpread: boolean
-  /** 銀卡：冰柱牢籠 */
-  isCage: boolean
-  /** 銀卡：冰晶地雷 */
-  isMine: boolean
-  /** 順序互動：地雷卡在蔓延卡之後 → 蔓延冰錐也是地雷 */
+  /** 順序：地雷在蔓延之後 → 蔓延凍土也是地雷 */
   spreadIsMine: boolean
+  /** 銀卡：凍土二重擊 */
+  hasDoubleHit: boolean
+  /** 銀卡：碎冰飛濺 */
+  hasShardSplash: boolean
+  /** 蔓延區是否套用二重擊（僅當二重擊在蔓延之後取得時為 true） */
+  spreadHasDoubleHit: boolean
+  /** 蔓延區是否套用碎冰飛濺（僅當飛濺在蔓延之後取得時為 true） */
+  spreadHasShardSplash: boolean
   /** 金卡：永凍結晶 */
   hasPermafrost: boolean
-  /** 金卡：冰錐共振 */
+  /** 金卡：凍土共振 */
   hasResonance: boolean
 }
 
 export const iceSpikeCards: CardDefinition[] = [
-  // 銅卡
+  // 銅卡（CardsDetail-v3 2-1, 2-2）
   {
-    id: 'ice-spike-arc-20',
-    name: '冰錐範圍 +20°',
+    id: 'ice-spike-tracking',
+    name: '凍土追蹤',
     skillId: 'ice-spike',
     rarity: 'bronze',
-    description: '弧形範圍擴大 20°，冰錐柱數不變（每根間距變大）',
-    orderNote: '純數值修正，不受順序影響',
+    description: '凍土改為鎖定最近敵人腳下生成，而非主角前方',
+    orderNote: '先拿蔓延再拿追蹤 → 蔓延的凍土不追蹤',
   },
   {
-    id: 'ice-spike-cooldown',
-    name: '冰錐冷卻 -0.4s',
+    id: 'ice-spike-cage',
+    name: '酷寒領域',
     skillId: 'ice-spike',
     rarity: 'bronze',
-    description: '冷卻時間減少 0.4 秒（可疊加，最低 0.5s）',
-    orderNote: '純數值修正，不受順序影響',
+    description: `扇形改為以主角為圓心的封閉圓環（半徑 ${ICE_SPIKE_CARD['ice-spike-cage'].cageRadius}px，蔓延時 ${ICE_SPIKE_CARD['ice-spike-cage'].cageRadiusWithSpread}px），持續 ${ICE_SPIKE_BASE.duration}s。代價：冷卻 +${ICE_SPIKE_CARD['ice-spike-cage'].cooldownBonus}s`,
+    orderNote: '疊加追蹤時改在最近敵人腳下生成',
   },
+  // 銀卡（CardsDetail-v3 2-3 ~ 2-6）
   {
-    id: 'ice-spike-pillar-3',
-    name: '冰錐柱數 +3',
+    id: 'ice-spike-mine',
+    name: '凍土地雷',
     skillId: 'ice-spike',
-    rarity: 'bronze',
-    description: '在現有弧形範圍內增加 3 根冰錐柱，自動均分排列',
-    orderNote: '純數值修正，不受順序影響',
+    rarity: 'silver',
+    description: `潛伏模式：凍土不立即顯現，敵人踏入時觸發。持續 ${ICE_SPIKE_CARD['ice-spike-mine'].mineDuration}s，傷害 x${ICE_SPIKE_CARD['ice-spike-mine'].damageMultiplier}。非酷寒領域時顯示觸發方向`,
+    orderNote: '放在蔓延卡之後 → 蔓延凍土也是地雷',
   },
-  // 銀卡
   {
     id: 'ice-spike-spread',
     name: '凍土蔓延',
     skillId: 'ice-spike',
     rarity: 'silver',
-    description: '命中區域後向弧形兩端蔓延新冰錐（延伸 80px），蔓延傷害 50%',
-    orderNote: '後拿的柱數卡會影響蔓延範圍；牢籠模式下無效',
+    description: `凍土生成後向扇形兩端蔓延（角度 +${ICE_SPIKE_CARD['ice-spike-spread'].spreadAngleBonus}°），蔓延傷害 ${Math.round(ICE_SPIKE_CARD['ice-spike-spread'].spreadDamageRatio * 100)}%`,
+    orderNote: '酷寒領域下無效。先拿二重擊/飛濺再拿蔓延 → 蔓延區不套用',
   },
   {
-    id: 'ice-spike-cage',
-    name: '冰柱牢籠',
+    id: 'ice-spike-double-hit',
+    name: '凍土二重擊',
     skillId: 'ice-spike',
     rarity: 'silver',
-    description: '弧形改為封閉圓環（半徑 60px），牢籠持續 3s。代價：冷卻 +1.5s',
-    orderNote: '改變形狀為環形，蔓延卡在牢籠模式下無效',
+    description: `凍土首次傷害後 ${ICE_SPIKE_CARD['ice-spike-double-hit'].delayMs / 1000} 秒同一位置再造成 ${Math.round(ICE_SPIKE_CARD['ice-spike-double-hit'].secondHitMultiplier * 100)}% 傷害`,
+    orderNote: '與永凍結晶聯動',
   },
   {
-    id: 'ice-spike-mine',
-    name: '冰晶地雷',
+    id: 'ice-spike-shard-splash',
+    name: '碎冰飛濺',
     skillId: 'ice-spike',
     rarity: 'silver',
-    description: '潛伏模式：冰錐不立即射出，敵人踏入時觸發。持續 8s，傷害 x1.5',
-    orderNote: '放在蔓延卡之後 → 蔓延冰錐也是地雷',
+    description: `凍土每次造成傷害時射出 ${ICE_SPIKE_CARD['ice-spike-shard-splash'].shardCount} 根小冰刺（各 ${Math.round(ICE_SPIKE_CARD['ice-spike-shard-splash'].shardDamageRatio * 100)}%），飛行 ${ICE_SPIKE_CARD['ice-spike-shard-splash'].shardTravelDistance}px`,
+    orderNote: '先拿蔓延再拿飛濺 → 主體+蔓延都會飛濺',
   },
-  // 金卡
+  // 金卡（CardsDetail-v3 2-7, 2-8）
   {
     id: 'ice-spike-permafrost',
     name: '永凍結晶',
     skillId: 'ice-spike',
     rarity: 'gold',
-    description: '所有冰錐（含未來）命中失溫敵人時直接凍結 1.5s，凍結中受傷 +25%',
-    orderNote: '金卡：不受順序影響，作用於所有現有及未來的冰錐',
+    description: `凍土命中失溫敵人時直接凍結 ${ICE_SPIKE_CARD['ice-spike-permafrost'].freezeDurationMs / 1000}s，凍結中受傷 +${Math.round(ICE_SPIKE_CARD['ice-spike-permafrost'].frozenDmgBonus * 100)}%`,
+    orderNote: '蔓延、地雷、飛濺等衍生物都觸發',
   },
   {
     id: 'ice-spike-resonance',
-    name: '冰錐共振',
+    name: '凍土共振',
     skillId: 'ice-spike',
     rarity: 'gold',
-    description: '所有冰錐（含未來）同時命中 3+ 敵人時觸發共振波（120px，80% 傷害）',
-    orderNote: '金卡：不受順序影響，需要多木樁才能觸發',
+    description: `凍土同時命中 ${ICE_SPIKE_CARD['ice-spike-resonance'].requiredEnemyCount}+ 敵人時觸發寒氣衝擊波（${ICE_SPIKE_CARD['ice-spike-resonance'].waveRadius}px，${Math.round(ICE_SPIKE_CARD['ice-spike-resonance'].waveDamageRatio * 100)}% 傷害）`,
+    orderNote: '蔓延區域覆蓋多人也會共振',
   },
 ]
 
 /**
- * 根據卡片序列計算冰錐快照
- * 銅卡：純數值修正
- * 銀卡：順序依賴行為修改
- * 金卡：全局效果，最後統一套用
+ * 根據卡片序列計算凍土快照（CardsDetail-v3）
  */
 export function computeIceSpikeSnapshot(cardSequence: CardDefinition[]): IceSpikeSnapshot {
   const snapshot: IceSpikeSnapshot = {
-    cooldown: 2.5,
-    arcAngle: 60,
-    castRange: 200,
-    pillarCount: 5,
-    damage: 25,
-    hasSpread: false,
+    cooldown: ICE_SPIKE_BASE.cooldown,
+    arcAngle: ICE_SPIKE_BASE.arcAngle,
+    castRange: ICE_SPIKE_BASE.castRange,
+    duration: ICE_SPIKE_BASE.duration,
+    dps: Math.round(ICE_SPIKE_BASE.baseDps * ICE_SPIKE_BASE.dpsRatio),
+    slowRate: ICE_SPIKE_BASE.slowRate,
+    hasTracking: false,
     isCage: false,
     isMine: false,
+    hasSpread: false,
     spreadIsMine: false,
+    hasDoubleHit: false,
+    hasShardSplash: false,
+    spreadHasDoubleHit: false,
+    spreadHasShardSplash: false,
     hasPermafrost: false,
     hasResonance: false,
   }
 
   const sequentialCards = cardSequence.filter((c) => c.rarity !== 'gold')
   const goldCards = cardSequence.filter((c) => c.rarity === 'gold')
-
-  // 1. 依序處理銅/銀卡（順序依賴）
   let spreadAdded = false
+  let spreadIndex = -1
+  let doubleHitIndex = -1
+  let shardSplashIndex = -1
+  let idx = 0
 
   for (const card of sequentialCards) {
     switch (card.id) {
-      // 銅卡
-      case 'ice-spike-arc-20':
-        snapshot.arcAngle += 20
+      case 'ice-spike-tracking':
+        snapshot.hasTracking = true
         break
-
-      case 'ice-spike-cooldown':
-        snapshot.cooldown = Math.max(0.5, snapshot.cooldown - 0.4)
+      case 'ice-spike-cage':
+        snapshot.isCage = true
+        snapshot.cooldown += ICE_SPIKE_CARD['ice-spike-cage'].cooldownBonus
         break
-
-      case 'ice-spike-pillar-3':
-        snapshot.pillarCount += 3
+      case 'ice-spike-mine':
+        snapshot.isMine = true
+        if (spreadAdded) snapshot.spreadIsMine = true
         break
-
-      // 銀卡
       case 'ice-spike-spread':
         snapshot.hasSpread = true
         spreadAdded = true
+        spreadIndex = idx
         break
-
-      case 'ice-spike-cage':
-        snapshot.isCage = true
-        snapshot.cooldown += 1.5
+      case 'ice-spike-double-hit':
+        snapshot.hasDoubleHit = true
+        doubleHitIndex = idx
         break
-
-      case 'ice-spike-mine':
-        snapshot.isMine = true
-        if (spreadAdded) {
-          snapshot.spreadIsMine = true
-        }
+      case 'ice-spike-shard-splash':
+        snapshot.hasShardSplash = true
+        shardSplashIndex = idx
         break
     }
+    idx++
   }
 
-  // 2. 統一套用金卡效果
-  for (const card of goldCards) {
-    switch (card.id) {
-      case 'ice-spike-permafrost':
-        snapshot.hasPermafrost = true
-        break
+  snapshot.spreadHasDoubleHit = snapshot.hasDoubleHit && spreadIndex >= 0 && doubleHitIndex > spreadIndex
+  snapshot.spreadHasShardSplash = snapshot.hasShardSplash && spreadIndex >= 0 && shardSplashIndex > spreadIndex
 
-      case 'ice-spike-resonance':
-        snapshot.hasResonance = true
-        break
-    }
+  for (const card of goldCards) {
+    if (card.id === 'ice-spike-permafrost') snapshot.hasPermafrost = true
+    if (card.id === 'ice-spike-resonance') snapshot.hasResonance = true
   }
 
   return snapshot
@@ -395,10 +467,24 @@ export interface FireballSnapshot {
   fireballs: FireballInstance[]
 }
 
+/** 取得用於強化碎片「數量」的初始火球 */
+export function getBaseFireballForExtra(): FireballInstance {
+  return {
+    damage: FIREBALL_BASE.damage,
+    explosionRadius: FIREBALL_BASE.explosionRadius,
+    hasBounce: false,
+    hasLava: false,
+    hasScatter: false,
+    isMeteor: false,
+    hasWildfire: false,
+    hasChainExplosion: false,
+  }
+}
+
 /** 火球初始單顆實例 */
 const BASE_FIREBALL: FireballInstance = {
-  damage: 45,
-  explosionRadius: 80,
+  damage: FIREBALL_BASE.damage,
+  explosionRadius: FIREBALL_BASE.explosionRadius,
   hasBounce: false,
   hasLava: false,
   hasScatter: false,
@@ -419,18 +505,18 @@ export const fireballCards: CardDefinition[] = [
   },
   {
     id: 'fireball-radius-25',
-    name: '爆炸半徑 +25px',
+    name: `爆炸半徑 +${FIREBALL_CARD['fireball-radius-25'].radiusBonus}px`,
     skillId: 'fireball',
     rarity: 'bronze',
-    description: '所有現有火球的爆炸範圍擴大 25px',
+    description: `所有現有火球的爆炸範圍擴大 ${FIREBALL_CARD['fireball-radius-25'].radiusBonus}px`,
     orderNote: '只影響放入此卡時已存在的火球',
   },
   {
     id: 'fireball-cooldown',
-    name: '火球冷卻 -0.5s',
+    name: `火球冷卻 -${FIREBALL_CARD['fireball-cooldown'].cooldownReduction}s`,
     skillId: 'fireball',
     rarity: 'bronze',
-    description: '整體冷卻時間縮短 0.5 秒（可疊加，最低 0.5s）',
+    description: `整體冷卻時間縮短 ${FIREBALL_CARD['fireball-cooldown'].cooldownReduction} 秒（可疊加，最低 ${FIREBALL_CARD['fireball-cooldown'].minCooldown}s）`,
     orderNote: '不受順序影響，疊加多張效果累積',
   },
   // 銀卡
@@ -439,7 +525,7 @@ export const fireballCards: CardDefinition[] = [
     name: '烈焰彈跳',
     skillId: 'fireball',
     rarity: 'silver',
-    description: '所有現有火球爆炸後彈跳，向前 100px 產生第二次爆炸（60% 傷害）',
+    description: `所有現有火球爆炸後彈跳，向前 ${FIREBALL_CARD['fireball-bounce'].bounceDistance}px 產生第二次爆炸（${Math.round(FIREBALL_CARD['fireball-bounce'].bounceDamageRatio * 100)}% 傷害）`,
     orderNote: '先拿彈跳再拿數量 → 新火球不彈跳',
   },
   {
@@ -447,7 +533,7 @@ export const fireballCards: CardDefinition[] = [
     name: '熔岩殘留',
     skillId: 'fireball',
     rarity: 'silver',
-    description: '所有現有火球爆炸後留下熔岩地面（半徑=爆炸×0.6，4s，20%傷害/秒，-25%速度）',
+    description: `所有現有火球爆炸後留下熔岩地面（半徑=爆炸×${FIREBALL_CARD['fireball-lava'].lavaRadiusRatio}，${FIREBALL_CARD['fireball-lava'].lavaDurationMs / 1000}s，${Math.round(FIREBALL_CARD['fireball-lava'].lavaDpsRatio * 100)}%傷害/秒，-${Math.round(FIREBALL_CARD['fireball-lava'].lavaSlowRate * 100)}%速度）`,
     orderNote: '彈跳火球兩次落點都會留熔岩',
   },
   {
@@ -455,7 +541,7 @@ export const fireballCards: CardDefinition[] = [
     name: '裂焰擴散',
     skillId: 'fireball',
     rarity: 'silver',
-    description: '所有現有火球爆炸時從邊緣射出 4 顆火花（飛 120px，30% 傷害，40px 半徑）',
+    description: `所有現有火球爆炸時從邊緣射出 ${FIREBALL_CARD['fireball-scatter'].sparkCount} 顆火花（飛 ${FIREBALL_CARD['fireball-scatter'].sparkDistance}px，${Math.round(FIREBALL_CARD['fireball-scatter'].sparkDamageRatio * 100)}% 傷害，${FIREBALL_CARD['fireball-scatter'].sparkRadius}px 半徑）`,
     orderNote: '將點狀爆炸轉為擴散覆蓋，先拿再拿數量 → 新火球不擴散',
   },
   {
@@ -463,7 +549,7 @@ export const fireballCards: CardDefinition[] = [
     name: '隕石墜落',
     skillId: 'fireball',
     rarity: 'silver',
-    description: '所有現有火球改為從天而降（+0.8s 延遲，傷害 ×1.8，半徑 ×1.3，±30px 偏移）',
+    description: `所有現有火球改為從天而降（+${FIREBALL_CARD['fireball-meteor'].delaySeconds}s 延遲，傷害 ×${FIREBALL_CARD['fireball-meteor'].damageMultiplier}，半徑 ×${FIREBALL_CARD['fireball-meteor'].radiusMultiplier}，±${FIREBALL_CARD['fireball-meteor'].offsetRange}px 偏移）`,
     orderNote: '犧牲精準度換取大範圍高傷害，先拿再拿數量 → 新火球非隕石',
   },
   // 金卡
@@ -472,7 +558,7 @@ export const fireballCards: CardDefinition[] = [
     name: '野火燎原',
     skillId: 'fireball',
     rarity: 'gold',
-    description: '所有火球（含未來）擊殺敵人後屍體燃燒 3s，接觸傷害；其他火球可引爆（+50% 傷害）',
+    description: `所有火球（含未來）擊殺敵人後屍體燃燒 ${FIREBALL_CARD['fireball-wildfire'].corpseBurnDurationMs / 1000}s，接觸傷害；其他火球可引爆（+${Math.round(FIREBALL_CARD['fireball-wildfire'].corpseExplodeDamageRatio * 100)}% 傷害）`,
     orderNote: '金卡：不受順序影響，作用於所有現有及未來的火球',
   },
   {
@@ -480,7 +566,7 @@ export const fireballCards: CardDefinition[] = [
     name: '連環爆破',
     skillId: 'fireball',
     rarity: 'gold',
-    description: '所有火球（含未來）爆炸範圍內的灼燒敵人觸發引爆（剩餘灼傷 ×2 瞬間傷害）',
+    description: `所有火球（含未來）爆炸範圍內的灼燒敵人觸發引爆（剩餘灼傷 ×${FIREBALL_CARD['fireball-chain-explosion'].burnExplodeMultiplier} 瞬間傷害）`,
     orderNote: '金卡：鼓勵搭配熔岩殘留先灼燒再引爆',
   },
 ]
@@ -493,9 +579,9 @@ export const fireballCards: CardDefinition[] = [
  */
 export function computeFireballSnapshot(cardSequence: CardDefinition[]): FireballSnapshot {
   const snapshot: FireballSnapshot = {
-    cooldown: 3,
-    throwDistance: 250,
-    spreadAngle: 30,
+    cooldown: FIREBALL_BASE.cooldown,
+    throwDistance: FIREBALL_BASE.throwDistance,
+    spreadAngle: FIREBALL_BASE.spreadAngle,
     fireballs: [{ ...BASE_FIREBALL }],
   }
 
@@ -512,13 +598,15 @@ export function computeFireballSnapshot(cardSequence: CardDefinition[]): Firebal
 
       case 'fireball-radius-25':
         for (const fb of snapshot.fireballs) {
-          fb.explosionRadius += 25
+          fb.explosionRadius += FIREBALL_CARD['fireball-radius-25'].radiusBonus
         }
         break
 
-      case 'fireball-cooldown':
-        snapshot.cooldown = Math.max(0.5, snapshot.cooldown - 0.5)
+      case 'fireball-cooldown': {
+        const cfg = FIREBALL_CARD['fireball-cooldown']
+        snapshot.cooldown = Math.max(cfg.minCooldown, snapshot.cooldown - cfg.cooldownReduction)
         break
+      }
 
       // 銀卡
       case 'fireball-bounce':
@@ -539,13 +627,15 @@ export function computeFireballSnapshot(cardSequence: CardDefinition[]): Firebal
         }
         break
 
-      case 'fireball-meteor':
+      case 'fireball-meteor': {
+        const cfg = FIREBALL_CARD['fireball-meteor']
         for (const fb of snapshot.fireballs) {
           fb.isMeteor = true
-          fb.damage = Math.round(fb.damage * 1.8)
-          fb.explosionRadius = Math.round(fb.explosionRadius * 1.3)
+          fb.damage = Math.round(fb.damage * cfg.damageMultiplier)
+          fb.explosionRadius = Math.round(fb.explosionRadius * cfg.radiusMultiplier)
         }
         break
+      }
     }
   }
 
@@ -569,19 +659,65 @@ export function computeFireballSnapshot(cardSequence: CardDefinition[]): Firebal
   return snapshot
 }
 
-// ── 光束卡片定義 ──
+/** 對單一陣列內的火球套用一張銅/銀卡效果（in-place） */
+export function applyFireballSequentialCardToFireballs(card: CardDefinition, fireballs: FireballInstance[]): void {
+  switch (card.id) {
+    case 'fireball-count-1':
+      fireballs.push({ ...BASE_FIREBALL })
+      break
+    default:
+      for (const fb of fireballs) {
+        switch (card.id) {
+          case 'fireball-radius-25': fb.explosionRadius += FIREBALL_CARD['fireball-radius-25'].radiusBonus; break
+          case 'fireball-bounce': fb.hasBounce = true; break
+          case 'fireball-lava': fb.hasLava = true; break
+          case 'fireball-scatter': fb.hasScatter = true; break
+          case 'fireball-meteor': {
+            const cfg = FIREBALL_CARD['fireball-meteor']
+            fb.isMeteor = true
+            fb.damage = Math.round(fb.damage * cfg.damageMultiplier)
+            fb.explosionRadius = Math.round(fb.explosionRadius * cfg.radiusMultiplier)
+            break
+          }
+        }
+      }
+  }
+}
+
+/** 對單一火球套用一張金卡效果（in-place） */
+export function applyFireballGoldCardToFireball(card: CardDefinition, fb: FireballInstance): void {
+  switch (card.id) {
+    case 'fireball-wildfire': fb.hasWildfire = true; break
+    case 'fireball-chain-explosion': fb.hasChainExplosion = true; break
+  }
+}
+
+// ── 光束卡片定義（CardsDetail-v3：脈衝制、無純數值卡）──
 
 /** 單道光束的實例快照 */
 export interface BeamInstance {
-  dps: number
+  /** 每發傷害（基礎 70，單發模式） */
+  pulseDamage: number
+  /** 光束寬度 px（基礎 25） */
   width: number
+  /** true = 單發（一發即止），false = 連發脈衝 */
+  singleShot: boolean
+  /** 銅卡：脈衝擊退 50px */
+  hasKnockback: boolean
+  /** 銅卡：雙線掃射（2 道 ±15°，各 50%，總值不變） */
+  hasDualLine: boolean
+  /** 銀卡：折射光束 */
   hasRefraction: boolean
-  /** 折射光束捕捉的寬度（放入折射卡時的寬度） */
   refractionWidth: number
+  /** 銀卡：聚焦灼燒 */
   hasFocusBurn: boolean
+  /** 銀卡：稜鏡分解 */
   hasPrismSplit: boolean
-  isPulseMode: boolean
+  /** 銀卡：過載尾段（最後 0.5s 傷害 ×2） */
+  hasOverloadTail: boolean
+  /** 金卡：灼熱殘影 */
   hasBurningTrail: boolean
+  /** 金卡：能量過載 */
   hasOverload: boolean
 }
 
@@ -589,19 +725,43 @@ export interface BeamInstance {
 export interface BeamSnapshot {
   cooldown: number
   range: number
+  /** 光束顯示持續時間 ms（單發 300，連發 2000） */
   duration: number
+  /** 脈衝間隔 ms（連發時 250，單發時不使用） */
+  pulseInterval: number
   beams: BeamInstance[]
+}
+
+/** 取得用於強化碎片「數量」的初始光束 */
+export function getBaseBeamForExtra(): BeamInstance {
+  return {
+    pulseDamage: BEAM_BASE.pulseDamage,
+    width: BEAM_BASE.width,
+    singleShot: true,
+    hasKnockback: false,
+    hasDualLine: false,
+    hasRefraction: false,
+    refractionWidth: BEAM_BASE.width,
+    hasFocusBurn: false,
+    hasPrismSplit: false,
+    hasOverloadTail: false,
+    hasBurningTrail: false,
+    hasOverload: false,
+  }
 }
 
 /** 光束初始單道實例 */
 const BASE_BEAM: BeamInstance = {
-  dps: 30,
-  width: 20,
-  hasRefraction: false,
-  refractionWidth: 20,
-  hasFocusBurn: false,
+  pulseDamage: BEAM_BASE.pulseDamage,
+  width: BEAM_BASE.width,
+  singleShot: true,
+  hasKnockback: false,
+    hasDualLine: false,
+    hasRefraction: false,
+    refractionWidth: BEAM_BASE.width,
+    hasFocusBurn: false,
   hasPrismSplit: false,
-  isPulseMode: false,
+  hasOverloadTail: false,
   hasBurningTrail: false,
   hasOverload: false,
 }
@@ -609,28 +769,20 @@ const BASE_BEAM: BeamInstance = {
 export const beamCards: CardDefinition[] = [
   // 銅卡
   {
-    id: 'beam-count-1',
-    name: '光束數量 +1',
+    id: 'beam-knockback',
+    name: '脈衝擊退',
     skillId: 'beam',
     rarity: 'bronze',
-    description: '新增一道初始數值的光束（朝不同方向的最近敵人）',
-    orderNote: '放在行為卡之後，新增的光束不繼承之前的行為效果',
+    description: `每次脈衝附加擊退 ${BEAM_CARD['beam-knockback'].knockbackDistance}px，總傷害不變`,
+    orderNote: '先拿折射再拿擊退 → 折射出的光束也擊退；先拿擊退再拿折射 → 只有首段擊退',
   },
   {
-    id: 'beam-width-15',
-    name: '光束寬度 +15px',
+    id: 'beam-dual-line',
+    name: '雙線掃射',
     skillId: 'beam',
     rarity: 'bronze',
-    description: '所有現有光束的寬度增加 15px',
-    orderNote: '只影響放入此卡時已存在的光束',
-  },
-  {
-    id: 'beam-cooldown',
-    name: '光束冷卻 -0.5s',
-    skillId: 'beam',
-    rarity: 'bronze',
-    description: '整體冷卻時間縮短 0.5 秒（可疊加，最低 0.5s）',
-    orderNote: '不受順序影響，疊加多張效果累積',
+    description: `光束分裂成 ${BEAM_CARD['beam-dual-line'].splitCount} 道，±${BEAM_CARD['beam-dual-line'].angleOffsetDeg}° 夾角，各 ${Math.round(BEAM_CARD['beam-dual-line'].damageRatioPerBeam * 100)}% 傷害，總傷害不變`,
+    orderNote: '雙線→稜鏡 = 6 道光束；稜鏡→雙線 = 只有母體變雙線，分解的 3 道不變',
   },
   // 銀卡
   {
@@ -638,135 +790,159 @@ export const beamCards: CardDefinition[] = [
     name: '折射光束',
     skillId: 'beam',
     rarity: 'silver',
-    description: '所有現有光束碰到第一個敵人後，折射到 200px 內的下一個敵人（70% 傷害），最多折射 2 次',
-    orderNote: '後拿的寬度卡不影響折射光束的寬度',
-  },
-  {
-    id: 'beam-focus-burn',
-    name: '聚焦灼燒',
-    skillId: 'beam',
-    rarity: 'silver',
-    description: '所有現有光束持續照射同一目標時，每秒傷害遞增 15%（最多 250%），切換目標時重置',
-    orderNote: '鼓勵對 Boss 持續集火',
+    description: `光束碰到第一個敵人後折射到 ${BEAM_CARD['beam-refraction'].refractionRange}px 內下一個敵人，折射後傷害 ${Math.round(BEAM_CARD['beam-refraction'].refractionDamageRatio * 100)}%`,
+    orderNote: '稜鏡→折射 = 折射後再分解 3 道；折射→稜鏡 = 折射出的單道不分解',
   },
   {
     id: 'beam-prism',
     name: '稜鏡分解',
     skillId: 'beam',
     rarity: 'silver',
-    description: '所有現有光束穿過首個敵人後，分成 3 道窄光束（寬度 1/3），30° 扇形擴散，各 40% 傷害',
-    orderNote: '三道同時命中同一目標時傷害合計 ×1.5',
+    description: `光束穿過首個敵人後分成 ${BEAM_CARD['beam-prism'].splitCount} 道窄光束（寬 1/${BEAM_CARD['beam-prism'].splitCount}），${BEAM_CARD['beam-prism'].spreadAngleDeg}° 扇形，各 ${Math.round(BEAM_CARD['beam-prism'].damageRatioPerBeam * 100)}% 傷害`,
+    orderNote: '三道同時命中同一目標時合計 ×1.5。聚焦→稜鏡 = 3 道獨立聚焦',
   },
   {
-    id: 'beam-pulse',
-    name: '脈衝模式',
+    id: 'beam-focus-burn',
+    name: '聚焦灼燒',
     skillId: 'beam',
     rarity: 'silver',
-    description: '所有現有光束改為每 0.3s 發射脈衝，傷害 = DPS×0.5，有 50px 擊退，每次重新瞄準',
-    orderNote: '犧牲持續鎖定換取擊退和靈活瞄準',
+    description: `持續照射同一目標時，每秒傷害遞增 ${Math.round(BEAM_CARD['beam-focus-burn'].incrementPerSecond * 100)}%，最多 ${Math.round(BEAM_CARD['beam-focus-burn'].maxMultiplier * 100)}%`,
+    orderNote: '雙線→聚焦 = 2 道光束可各自聚焦不同目標；聚焦→雙線 = 共享聚焦計數器',
   },
-  // 金卡
+  {
+    id: 'beam-overload-tail',
+    name: '過載尾段',
+    skillId: 'beam',
+    rarity: 'silver',
+    description: `持續時間最後 ${BEAM_CARD['beam-overload-tail'].tailDurationMs / 1000} 秒傷害 ×${BEAM_CARD['beam-overload-tail'].tailDamageMultiplier}`,
+    orderNote: '與能量過載（金）疊加：尾段 ×2 再過載 ×3，最後 0.5 秒爆發極高',
+  },
+  // 金卡（CardsDetail-v3 4-7, 4-8）
   {
     id: 'beam-burning-trail',
     name: '灼熱殘影',
     skillId: 'beam',
     rarity: 'gold',
-    description: '所有光束（含未來）照射結束後，路徑留下殘影光帶 2s，造成 30% DPS 灼傷',
-    orderNote: '金卡：不受順序影響，作用於所有現有及未來的光束',
+    description: `所有光束（含未來）照射結束後路徑留下殘影光帶 ${BEAM_CARD['beam-burning-trail'].trailDurationMs / 1000} 秒，${Math.round(BEAM_CARD['beam-burning-trail'].trailDpsRatio * 100)}%/s 灼傷`,
+    orderNote: '金卡：折射、稜鏡、雙線的光束都留殘影',
   },
   {
     id: 'beam-overload',
     name: '能量過載',
     skillId: 'beam',
     rarity: 'gold',
-    description: '所有光束（含未來）最後 0.5s 進入過載：傷害 ×3、寬度 ×2，過載後冷卻 +1s',
-    orderNote: '金卡：不受順序影響，作用於所有現有及未來的光束',
+    description: `所有光束（含未來）最後 ${BEAM_CARD['beam-overload'].overloadDurationMs / 1000} 秒進入過載：傷害 ×${BEAM_CARD['beam-overload'].overloadDamageMultiplier}、寬度 ×${BEAM_CARD['beam-overload'].overloadWidthMultiplier}`,
+    orderNote: '金卡：雙線、稜鏡的光束過載時也 ×3 ×2',
   },
 ]
 
 /**
- * 根據卡片序列計算光束快照
- * 核心機制：順序依賴堆疊
- * - 銅/銀卡：順序依賴，只影響「當下已存在」的光束
- * - 金卡：全局效果，不受順序影響，最後統一套用
+ * 根據卡片序列計算光束快照（CardsDetail-v3）
+ * 光束預設單發 70 傷、持續 0.3s
  */
 export function computeBeamSnapshot(cardSequence: CardDefinition[]): BeamSnapshot {
   const snapshot: BeamSnapshot = {
-    cooldown: 3,
-    range: 400,
-    duration: 2,
+    cooldown: BEAM_BASE.cooldown,
+    range: BEAM_BASE.range,
+    duration: BEAM_BASE.duration,
+    pulseInterval: BEAM_BASE.pulseInterval,
     beams: [{ ...BASE_BEAM }],
   }
 
   const sequentialCards = cardSequence.filter((c) => c.rarity !== 'gold')
   const goldCards = cardSequence.filter((c) => c.rarity === 'gold')
 
-  // 1. 依序處理銅/銀卡
   for (const card of sequentialCards) {
     switch (card.id) {
-      // 銅卡
-      case 'beam-count-1':
-        snapshot.beams.push({ ...BASE_BEAM })
+      case 'beam-knockback':
+        for (const b of snapshot.beams) b.hasKnockback = true
         break
-
-      case 'beam-width-15':
-        for (const b of snapshot.beams) {
-          b.width += 15
-        }
-        break
-
-      case 'beam-cooldown':
-        snapshot.cooldown = Math.max(0.5, snapshot.cooldown - 0.5)
-        break
-
-      // 銀卡
       case 'beam-refraction':
         for (const b of snapshot.beams) {
           b.hasRefraction = true
-          b.refractionWidth = b.width // 捕捉當前寬度，後拿的寬度卡不影響折射寬度
+          b.refractionWidth = b.width
         }
         break
-
-      case 'beam-focus-burn':
-        for (const b of snapshot.beams) {
-          b.hasFocusBurn = true
-        }
-        break
-
       case 'beam-prism':
-        for (const b of snapshot.beams) {
-          b.hasPrismSplit = true
-        }
+        for (const b of snapshot.beams) b.hasPrismSplit = true
         break
-
-      case 'beam-pulse':
+      case 'beam-focus-burn':
+        for (const b of snapshot.beams) b.hasFocusBurn = true
+        break
+      case 'beam-dual-line': {
+        const ratio = BEAM_CARD['beam-dual-line'].damageRatioPerBeam
+        const newBeams: BeamInstance[] = []
         for (const b of snapshot.beams) {
-          b.isPulseMode = true
+          const half = Math.round(b.pulseDamage * ratio)
+          newBeams.push({ ...b, pulseDamage: half })
+          newBeams.push({ ...b, pulseDamage: half })
         }
+        snapshot.beams.length = 0
+        snapshot.beams.push(...newBeams)
+        break
+      }
+      case 'beam-overload-tail':
+        for (const b of snapshot.beams) b.hasOverloadTail = true
         break
     }
   }
 
-  // 2. 統一套用金卡效果到所有光束（含數量卡新增的）
   for (const card of goldCards) {
     switch (card.id) {
       case 'beam-burning-trail':
-        for (const b of snapshot.beams) {
-          b.hasBurningTrail = true
-        }
+        for (const b of snapshot.beams) b.hasBurningTrail = true
         break
-
       case 'beam-overload':
-        for (const b of snapshot.beams) {
-          b.hasOverload = true
-        }
-        // 能量過載：冷卻 +1s（過載每次都觸發，直接加入冷卻）
-        snapshot.cooldown += 1
+        for (const b of snapshot.beams) b.hasOverload = true
         break
     }
   }
 
   return snapshot
+}
+
+/** 對單一陣列內的光束套用一張銅/銀卡效果（in-place） */
+export function applyBeamSequentialCardToBeams(card: CardDefinition, beams: BeamInstance[]): void {
+  switch (card.id) {
+    case 'beam-knockback':
+      for (const b of beams) b.hasKnockback = true
+      break
+    case 'beam-refraction':
+      for (const b of beams) {
+        b.hasRefraction = true
+        b.refractionWidth = b.width
+      }
+      break
+    case 'beam-prism':
+      for (const b of beams) b.hasPrismSplit = true
+      break
+    case 'beam-focus-burn':
+      for (const b of beams) b.hasFocusBurn = true
+      break
+    case 'beam-dual-line': {
+      const ratio = BEAM_CARD['beam-dual-line'].damageRatioPerBeam
+      const newBeams: BeamInstance[] = []
+      for (const b of beams) {
+        const half = Math.round(b.pulseDamage * ratio)
+        newBeams.push({ ...b, pulseDamage: half })
+        newBeams.push({ ...b, pulseDamage: half })
+      }
+      beams.length = 0
+      beams.push(...newBeams)
+      break
+    }
+    case 'beam-overload-tail':
+      for (const b of beams) b.hasOverloadTail = true
+      break
+  }
+}
+
+/** 對單道光束套用一張金卡效果（in-place） */
+export function applyBeamGoldCardToBeam(card: CardDefinition, b: BeamInstance): void {
+  switch (card.id) {
+    case 'beam-burning-trail': b.hasBurningTrail = true; break
+    case 'beam-overload': b.hasOverload = true; break
+  }
 }
 
 /** 稀有度顯示配色（Tailwind 類名，用於 className） */

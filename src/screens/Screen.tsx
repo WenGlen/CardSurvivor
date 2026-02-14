@@ -15,7 +15,7 @@ export default function Screen() {
     case 'mode-select':
       return <ModeSelectScreen onSelect={setScreen} />
     case 'practice':
-      return <PracticeScreen />
+      return <PracticeScreen onExit={() => setScreen('mode-select')} />
     case 'infinite':
       return <InfiniteScreen onExit={() => setScreen('mode-select')} />
     default:

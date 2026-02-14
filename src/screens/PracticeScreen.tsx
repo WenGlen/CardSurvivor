@@ -20,7 +20,7 @@ const CANVAS_WIDTH = 800
 const CANVAS_HEIGHT = 600
 
 /** 練習場畫面 - 不動敵人 + 可操控主角 + 右側卡片堆疊面板 */
-export default function PracticeScreen() {
+export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<GameEngine | null>(null)
   const [activeSkillId, setActiveSkillId] = useState<string>('ice-arrow')
@@ -31,6 +31,7 @@ export default function PracticeScreen() {
     'beam': [],
   })
   const [enemyHp, setEnemyHp] = useState(9999)
+  const [paused, setPaused] = useState(false)
   const [, forceRender] = useState(0)
 
   const triggerRender = useCallback(() => {
@@ -235,6 +236,28 @@ export default function PracticeScreen() {
           <div className="absolute bottom-2 left-2 text-xs text-gray-500">
             WASD 移動 · 拖曳木樁可移動位置
           </div>
+          <div className="absolute top-2 left-2 flex gap-2">
+            {onExit && (
+              <button
+                onClick={() => { engineRef.current?.stop(); onExit() }}
+                className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded transition-colors"
+              >
+                回到選單
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setPaused((p) => {
+                  if (p) engineRef.current?.resume()
+                  else engineRef.current?.pause()
+                  return !p
+                })
+              }}
+              className={`px-3 py-1.5 text-xs rounded transition-colors ${paused ? 'bg-amber-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+            >
+              {paused ? '繼續' : '暫停'}
+            </button>
+          </div>
         </div>
 
         {/* 快照預覽 + 控制列 */}
@@ -299,7 +322,7 @@ export default function PracticeScreen() {
         <div className="flex border-b border-gray-700">
           {([
             { id: 'ice-arrow', name: '冰箭' },
-            { id: 'ice-spike', name: '冰錐' },
+            { id: 'ice-spike', name: '凍土' },
             { id: 'fireball', name: '火球' },
             { id: 'beam', name: '光束' },
           ] as const).map((skill) => (
@@ -444,6 +467,8 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
         冷卻 <span className="text-white">{cooldown}s</span>
         {' · '}
         總箭數 <span className="text-white">{arrows.length}</span>
+        {' · '}
+        發射 <span className="text-white">360° 均分</span>
       </div>
       <div className="border border-gray-700 rounded overflow-hidden">
         <table className="w-full">
@@ -455,6 +480,8 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
               <th className="px-1.5 py-1 text-right">穿透</th>
               <th className="px-1.5 py-1 text-center">分裂</th>
               <th className="px-1.5 py-1 text-center">追蹤</th>
+              <th className="px-1.5 py-1 text-center">彈幕</th>
+              <th className="px-1.5 py-1 text-center">失溫</th>
               <th className="px-1.5 py-1 text-center">寒氣</th>
               <th className="px-1.5 py-1 text-center">聚合</th>
               <th className="px-1.5 py-1 text-center">連鎖</th>
@@ -476,6 +503,12 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
                   {arrow.hasTracking ? <span className="text-purple-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
+                  {arrow.hasShardBarrage ? <span className="text-cyan-200">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
+                  {arrow.chillChanceBonus > 0 ? <span className="text-green-300">+{arrow.chillChanceBonus * 100}%</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
                   {arrow.hasColdZone ? <span className="text-yellow-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
@@ -493,13 +526,16 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
   )
 }
 
-/** 冰錐快照預覽 */
+/** 凍土快照預覽 */
 function IceSpikePreview({ snapshot }: { snapshot: IceSpikeSnapshot }) {
   const flags: { label: string; active: boolean; color: string }[] = [
-    { label: '蔓延', active: snapshot.hasSpread, color: 'text-cyan-300' },
-    { label: '牢籠', active: snapshot.isCage, color: 'text-blue-300' },
+    { label: '追蹤', active: snapshot.hasTracking, color: 'text-cyan-300' },
+    { label: '領域', active: snapshot.isCage, color: 'text-blue-300' },
     { label: '地雷', active: snapshot.isMine, color: 'text-purple-300' },
+    { label: '蔓延', active: snapshot.hasSpread, color: 'text-cyan-200' },
     { label: '蔓延地雷', active: snapshot.spreadIsMine, color: 'text-purple-200' },
+    { label: '二重擊', active: snapshot.hasDoubleHit, color: 'text-blue-200' },
+    { label: '飛濺', active: snapshot.hasShardSplash, color: 'text-cyan-100' },
     { label: '永凍', active: snapshot.hasPermafrost, color: 'text-yellow-300' },
     { label: '共振', active: snapshot.hasResonance, color: 'text-orange-300' },
   ]
@@ -509,10 +545,11 @@ function IceSpikePreview({ snapshot }: { snapshot: IceSpikeSnapshot }) {
     <div className="text-xs">
       <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
         <span>冷卻 <span className="text-white">{snapshot.cooldown}s</span></span>
-        <span>{snapshot.isCage ? '圓環' : '弧度'} <span className="text-white">{snapshot.isCage ? '360°' : `${snapshot.arcAngle}°`}</span></span>
+        <span>扇形 <span className="text-white">{snapshot.arcAngle}°</span></span>
         <span>距離 <span className="text-white">{snapshot.castRange}px</span></span>
-        <span>柱數 <span className="text-white">{snapshot.pillarCount}</span></span>
-        <span>傷害 <span className="text-white">{snapshot.isMine ? `${Math.round(snapshot.damage * 1.5)}(x1.5)` : snapshot.damage}</span></span>
+        <span>持續 <span className="text-white">{snapshot.duration}s</span></span>
+        <span>傷害 <span className="text-white">{snapshot.dps}/s</span></span>
+        <span>減速 <span className="text-white">{Math.round(snapshot.slowRate * 100)}%</span></span>
       </div>
       {activeFlags.length > 0 && (
         <div className="flex gap-1.5 flex-wrap mt-1">
@@ -623,20 +660,24 @@ function BeamPreview({ snapshot }: { snapshot: BeamSnapshot }) {
           <thead>
             <tr className="bg-gray-700/50 text-gray-400">
               <th className="px-1.5 py-1 text-left">#</th>
-              <th className="px-1.5 py-1 text-right">DPS</th>
-              <th className="px-1.5 py-1 text-right">寬度</th>
+              <th className="px-1.5 py-1 text-right">傷/脈</th>
+              <th className="px-1.5 py-1 text-right">寬</th>
+              <th className="px-1.5 py-1 text-center">擊退</th>
               <th className="px-1.5 py-1 text-center">折射</th>
               <th className="px-1.5 py-1 text-center">聚焦</th>
               <th className="px-1.5 py-1 text-center">稜鏡</th>
-              <th className="px-1.5 py-1 text-center">脈衝</th>
+              <th className="px-1.5 py-1 text-center">尾段</th>
             </tr>
           </thead>
           <tbody>
             {snapshot.beams.map((b, i) => (
               <tr key={i} className="border-t border-gray-700/50">
                 <td className="px-1.5 py-1 text-gray-500">{i + 1}</td>
-                <td className="px-1.5 py-1 text-right text-white">{b.dps}</td>
+                <td className="px-1.5 py-1 text-right text-white">{b.pulseDamage}</td>
                 <td className="px-1.5 py-1 text-right text-white">{b.width}px</td>
+                <td className="px-1.5 py-1 text-center">
+                  {b.hasKnockback ? <span className="text-amber-300">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
                 <td className="px-1.5 py-1 text-center">
                   {b.hasRefraction ? <span className="text-cyan-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
@@ -647,7 +688,7 @@ function BeamPreview({ snapshot }: { snapshot: BeamSnapshot }) {
                   {b.hasPrismSplit ? <span className="text-purple-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
-                  {b.isPulseMode ? <span className="text-yellow-300">✓</span> : <span className="text-gray-600">—</span>}
+                  {b.hasOverloadTail ? <span className="text-red-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
               </tr>
             ))}

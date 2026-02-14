@@ -7,16 +7,20 @@ import {
   iceSpikeCards,
   fireballCards,
   beamCards,
-  computeIceArrowSnapshot,
-  computeIceSpikeSnapshot,
-  computeFireballSnapshot,
-  computeBeamSnapshot,
   rarityHexColors,
   rarityNames,
 } from '../models/cards'
+import {
+  computeIceArrowSnapshotFromSequence,
+  computeIceSpikeSnapshotFromSequence,
+  computeFireballSnapshotFromSequence,
+  computeBeamSnapshotFromSequence,
+} from '../models/infiniteSnapshot'
+import { getSlotStatusLines, getSkillIcon } from '../models/skillStatus'
 import type { CardDefinition } from '../models/cards'
 import { drawGame } from '../rendering/drawFunctions'
 import type { HudConfig } from '../rendering/drawFunctions'
+import { getBuffLabels } from '../config'
 import {
   createInfiniteState,
   generateCardOffer,
@@ -29,13 +33,13 @@ import {
   getSpawnBatchSize,
   saveBestRecord,
   loadBestRecord,
+  getValidTargetSlotsForPickup,
   MAX_ENEMIES,
 } from '../models/InfiniteGameLogic'
 import type { InfiniteGameState, GamePhase, BestRecord } from '../models/InfiniteGameLogic'
 
 const CANVAS_WIDTH = 800
 const CANVAS_HEIGHT = 600
-const WAVE_CLEAR_DURATION = 2000
 
 /** 所有卡片合集 */
 const allCards: CardDefinition[] = [
@@ -45,25 +49,27 @@ const allCards: CardDefinition[] = [
   ...beamCards,
 ]
 
-/** 根據 skillId 對應的 snapshot 計算函式 */
-function computeAndSetSnapshot(
-  engine: GameEngine,
-  skillId: string,
-  cards: CardDefinition[],
-) {
-  switch (skillId) {
-    case 'ice-arrow':
-      engine.setIceArrowSnapshot(computeIceArrowSnapshot(cards))
-      break
-    case 'ice-spike':
-      engine.setIceSpikeSnapshot(computeIceSpikeSnapshot(cards))
-      break
-    case 'fireball':
-      engine.setFireballSnapshot(computeFireballSnapshot(cards))
-      break
-    case 'beam':
-      engine.setBeamSnapshot(computeBeamSnapshot(cards))
-      break
+/** 套用所有卡槽快照到引擎（從 slot.items 依序計算，順序影響效果） */
+function applyAllSnapshotsWithBuffs(engine: GameEngine, gs: InfiniteGameState) {
+  for (const slot of gs.slots) {
+    if (!slot.skillId) continue
+    const hasCards = slot.items.some(i => i.kind === 'card')
+    if (!hasCards) continue
+
+    switch (slot.skillId) {
+      case 'ice-arrow':
+        engine.setIceArrowSnapshot(computeIceArrowSnapshotFromSequence(slot.items))
+        break
+      case 'ice-spike':
+        engine.setIceSpikeSnapshot(computeIceSpikeSnapshotFromSequence(slot.items))
+        break
+      case 'fireball':
+        engine.setFireballSnapshot(computeFireballSnapshotFromSequence(slot.items))
+        break
+      case 'beam':
+        engine.setBeamSnapshot(computeBeamSnapshotFromSequence(slot.items))
+        break
+    }
   }
 }
 
@@ -73,7 +79,6 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
   const engineRef = useRef<GameEngine | null>(null)
   const gsRef = useRef<InfiniteGameState>(createInfiniteState())
   const spawnTimerRef = useRef(0)
-  const waveClearTimerRef = useRef(0)
 
   const [phase, setPhase] = useState<GamePhase>('INITIAL_PICK')
   const [cardOffer, setCardOffer] = useState<CardDefinition[]>([])
@@ -85,6 +90,32 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
     forceRender((n) => n + 1)
   }, [])
 
+  /** 拾取強化碎片：buff 加入 targetSlotIndex 對應卡槽的 items 序列 */
+  const onPickupCollected = useCallback((type: 'cooldown' | 'range' | 'count', targetSlotIndex: number) => {
+    const gs = gsRef.current
+    const engine = engineRef.current
+    if (!engine) return
+
+    const slot = gs.slots[targetSlotIndex]
+    if (!slot?.skillId) return
+
+    const buffLabel = getBuffLabels()
+    const skillName = allSkills.find(s => s.id === slot.skillId)?.name ?? slot.skillId ?? ''
+    const label = type === 'count' ? `${buffLabel.count}（${skillName}）` : buffLabel[type]
+    slot.items.push({ kind: 'buff', buff: { type, label, skillId: slot.skillId } })
+
+    applyAllSnapshotsWithBuffs(engine, gs)
+    triggerRender()
+  }, [triggerRender])
+
+  /** 生成 pickup 時解析目標卡槽（隨機選一個有效槽位） */
+  const resolvePickupTarget = useCallback((type: 'cooldown' | 'range' | 'count'): number | null => {
+    const gs = gsRef.current
+    const valid = getValidTargetSlotsForPickup(gs, type)
+    if (valid.length === 0) return null
+    return valid[Math.floor(Math.random() * valid.length)]!
+  }, [])
+
   /** 擊殺回呼 */
   const onEnemyKilled = useCallback(() => {
     const gs = gsRef.current
@@ -92,20 +123,14 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
 
     const waveComplete = handleKill(gs)
     if (waveComplete) {
-      // 進入波次結算
-      gs.phase = 'WAVE_CLEAR'
-      setPhase('WAVE_CLEAR')
-      waveClearTimerRef.current = performance.now()
-
-      // 暫停引擎（凍結敵人+停止技能）
-      engineRef.current?.pause()
-
-      // 清場
-      engineRef.current?.clearAllEnemiesAndEffects()
-      engineRef.current?.resetPlayerPosition()
-
       // 波次結算（回血 + 準備下波）
       advanceWave(gs)
+      // 暫停引擎，直接進入選卡（不重置場景、不移動玩家）
+      engineRef.current?.pause()
+      gs.phase = 'CARD_PICK'
+      setPhase('CARD_PICK')
+      const offer = generateCardOffer(gs, allCards)
+      setCardOffer(offer)
     }
   }, [])
 
@@ -119,6 +144,9 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
       fireAllEquippedSkills: true,
       noInitialEnemies: true,
       onEnemyKilled: onEnemyKilled,
+      enableMapPickups: true,
+      resolvePickupTarget,
+      onPickupCollected,
     }
 
     const engine = new GameEngine(CANVAS_WIDTH, CANVAS_HEIGHT, triggerRender, modeConfig)
@@ -132,7 +160,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
     setCardOffer(offer)
 
     return () => engine.stop()
-  }, [triggerRender, onEnemyKilled])
+  }, [triggerRender, onEnemyKilled, onPickupCollected, resolvePickupTarget])
 
   /** 暫停/繼續切換 */
   const togglePause = useCallback(() => {
@@ -216,16 +244,6 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
         }
       }
 
-      if (gs.phase === 'WAVE_CLEAR') {
-        if (now - waveClearTimerRef.current >= WAVE_CLEAR_DURATION) {
-          // 進入抽卡
-          gs.phase = 'CARD_PICK'
-          setPhase('CARD_PICK')
-          const offer = generateCardOffer(gs, allCards)
-          setCardOffer(offer)
-        }
-      }
-
       raf = requestAnimationFrame(gameLoop)
     }
 
@@ -242,7 +260,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
     if (!ctx) return
 
     const gs = gsRef.current
-    const hud: HudConfig | undefined = gs.phase === 'BATTLE' || gs.phase === 'WAVE_CLEAR'
+    const hud: HudConfig | undefined = gs.phase === 'BATTLE'
       ? {
           playerHp: gs.playerHp,
           playerMaxHp: gs.playerMaxHp,
@@ -267,12 +285,8 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
 
     placeCard(gs, card)
 
-    // 同步所有卡槽的快照到引擎
-    for (const slot of gs.slots) {
-      if (slot.skillId) {
-        computeAndSetSnapshot(engine, slot.skillId, slot.cards)
-      }
-    }
+    // 同步所有卡槽的快照到引擎（含強化碎片加成）
+    applyAllSnapshotsWithBuffs(engine, gs)
 
     if (gs.phase === 'INITIAL_PICK') {
       // 初始抽卡完成 → 進入 Wave 1
@@ -316,6 +330,9 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
       fireAllEquippedSkills: true,
       noInitialEnemies: true,
       onEnemyKilled: onEnemyKilled,
+      enableMapPickups: true,
+      resolvePickupTarget,
+      onPickupCollected,
     }
     const engine = new GameEngine(CANVAS_WIDTH, CANVAS_HEIGHT, triggerRender, modeConfig)
     allSkills.forEach((s) => engine.registerSkill(s))
@@ -367,18 +384,6 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
           />
         )}
 
-        {/* WAVE_CLEAR overlay */}
-        {phase === 'WAVE_CLEAR' && (
-          <div style={overlayStyle}>
-            <div style={{ fontSize: 32, fontWeight: 'bold', color: '#4CAF50' }}>
-              Wave {gs.wave.waveNumber - 1} 通過！
-            </div>
-            <div style={{ fontSize: 16, color: '#aaa', marginTop: 8 }}>
-              回復 20% HP · 準備下一波...
-            </div>
-          </div>
-        )}
-
         {/* CARD_PICK overlay */}
         {phase === 'CARD_PICK' && (
           <CardPickOverlay
@@ -417,9 +422,9 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
         )}
       </div>
 
-      {/* 底部卡槽預覽 + 冷卻倒數 */}
-      {(phase === 'BATTLE' || phase === 'WAVE_CLEAR' || phase === 'CARD_PICK') && (
-        <div style={{ display: 'flex', gap: 12 }}>
+      {/* 底部卡槽預覽（疊卡樣式）+ 冷卻倒數；狀態摘要置於卡槽右側 */}
+      {(phase === 'BATTLE' || phase === 'CARD_PICK') && (
+        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
           {gs.slots.map((slot, i) => {
             const engine = engineRef.current
             const skill = slot.skillId ? allSkills.find(s => s.id === slot.skillId) : null
@@ -429,7 +434,6 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
             const isReady = remaining <= 0 && !!slot.skillId
             const pct = Math.round((1 - ratio) * 360)
 
-            // 外框邊框：就緒時綠色實線，冷卻中用 conic-gradient 模擬掃描
             const borderColor = !slot.skillId ? '#333'
               : isReady ? '#4CAF50'
               : '#555'
@@ -438,24 +442,29 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
               : undefined
 
             return (
-              <div key={i} style={{
-                width: 200, borderRadius: 10, position: 'relative',
-                padding: 4,
-                background: borderImg ?? borderColor,
-              }}>
+              <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
                 <div style={{
-                  borderRadius: 7, padding: 8,
-                  background: slot.skillId ? '#2a2a3e' : '#1a1a2e',
+                  width: 220, minHeight: 100, position: 'relative',
+                  padding: 4, borderRadius: 10,
+                  background: borderImg ?? borderColor,
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                    <div style={{ fontSize: 13, fontWeight: 'bold', flex: 1 }}>
-                      {slot.skillId
-                        ? skill?.name ?? slot.skillId
-                        : `卡槽 ${i + 1} (空)`}
+                  <div style={{
+                    borderRadius: 7, minHeight: 92,
+                    background: slot.skillId ? '#1a1a2e' : '#15152a',
+                    position: 'relative', overflow: 'hidden',
+                  }}>
+                  {/* 技能名稱 + 冷卻 */}
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px',
+                    borderBottom: slot.items.length > 0 ? '1px solid #333' : undefined,
+                  }}>
+                    <div style={{ fontSize: 12, fontWeight: 'bold', flex: 1, color: '#ccc', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {slot.skillId && <span style={{ fontSize: 14 }}>{getSkillIcon(slot.skillId)}</span>}
+                      {slot.skillId ? (skill?.name ?? slot.skillId) : `卡槽 ${i + 1}`}
                     </div>
                     {slot.skillId && (
                       <span style={{
-                        fontSize: 11, fontWeight: 'bold', fontFamily: 'monospace',
+                        fontSize: 10, fontWeight: 'bold', fontFamily: 'monospace',
                         color: isReady ? '#4CAF50' : '#FFB74D',
                       }}>
                         {isReady ? 'READY' : remaining.toFixed(1) + 's'}
@@ -463,19 +472,91 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                     )}
                   </div>
 
-                  {slot.cards.length > 0 && (
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}>
-                      {slot.cards.map((c, j) => (
-                        <span key={j} style={{
-                          fontSize: 10, padding: '1px 4px', borderRadius: 3,
-                          background: rarityHexColors[c.rarity] + '33',
-                          color: rarityHexColors[c.rarity],
-                        }}>{c.name}</span>
-                      ))}
+                  {/* 疊卡：一般卡片 + 強化碎片卡，標題在上，最上一張多顯示說明 */}
+                  {slot.items.length > 0 ? (
+                    <div style={{
+                      padding: 6, position: 'relative',
+                      display: 'flex', flexDirection: 'column', gap: 0,
+                    }}>
+                      {slot.items.map((item, j) => {
+                        const isTop = j === slot.items.length - 1
+                        if (item.kind === 'card') {
+                          const c = item.card
+                          return (
+                            <div
+                              key={'c-' + j}
+                              style={{
+                                marginTop: j === 0 ? 0 : -20,
+                                padding: isTop ? '8px 10px 10px' : '6px 10px 8px',
+                                paddingBottom: isTop ? 10 : 14,
+                                borderRadius: 4,
+                                background: `linear-gradient(to bottom, ${rarityHexColors[c.rarity]}28, ${rarityHexColors[c.rarity]}10)`,
+                                border: `1px solid ${rarityHexColors[c.rarity]}55`,
+                                boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                                zIndex: j,
+                              }}
+                            >
+                              <div style={{ fontSize: 11, fontWeight: 'bold', color: rarityHexColors[c.rarity] }}>
+                                {c.name}
+                              </div>
+                              {isTop && (
+                                <div style={{ fontSize: 10, color: '#999', lineHeight: 1.4, marginTop: 6 }}>
+                                  {c.description}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        }
+                        const b = item.buff
+                        const buffColors = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D' }
+                        const color = buffColors[b.type]
+                        return (
+                          <div
+                            key={'b-' + j}
+                            style={{
+                              marginTop: j === 0 ? 0 : -20,
+                              padding: isTop ? '8px 10px 10px' : '6px 10px 8px',
+                              paddingBottom: isTop ? 10 : 14,
+                              borderRadius: 4,
+                              background: `linear-gradient(to bottom, ${color}28, ${color}10)`,
+                              border: `1px solid ${color}55`,
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                              zIndex: j,
+                            }}
+                          >
+                            <div style={{ fontSize: 11, fontWeight: 'bold', color }}>
+                              {b.label}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ padding: 16, fontSize: 11, color: '#555', textAlign: 'center' }}>
+                      空
                     </div>
                   )}
                 </div>
               </div>
+
+              {/* 技能狀態摘要：置於卡槽右側，冷卻/範圍＋效果標籤 */}
+              {slot.skillId && (
+                <div style={{
+                  minWidth: 140, padding: '6px 10px 8px',
+                  background: '#15152a',
+                  borderRadius: 6,
+                  border: '1px solid #333',
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  color: '#aaa',
+                  lineHeight: 1.4,
+                }}>
+                  {getSlotStatusLines(slot.skillId, slot.items).map((line, k) => (
+                    <div key={k} title={line}>{line}</div>
+                  ))}
+                </div>
+              )}
+            </div>
             )
           })}
         </div>
@@ -532,7 +613,8 @@ function CardPickOverlay({ title, subtitle, cards, onPick, slots }: {
                 )}
               </div>
               <div style={{ fontSize: 16, fontWeight: 'bold', marginBottom: 6 }}>{card.name}</div>
-              <div style={{ fontSize: 11, color: '#aaa', marginBottom: 8 }}>
+              <div style={{ fontSize: 11, color: '#aaa', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span>{getSkillIcon(card.skillId)}</span>
                 {skill?.name ?? card.skillId}
               </div>
               <div style={{ fontSize: 12, color: '#ccc', lineHeight: 1.4 }}>{card.description}</div>

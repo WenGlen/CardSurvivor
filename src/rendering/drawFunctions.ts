@@ -15,7 +15,7 @@ export interface HudConfig {
 
 /** 繪製遊戲畫面 */
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: HudConfig) {
-  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, resonanceWaves, fireballProjectiles, fireExplosions, lavaZones, burningCorpses, beamEffects, beamTrails } = state
+  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, frozenGroundShards, resonanceWaves, fireballProjectiles, fireExplosions, lavaZones, burningCorpses, beamEffects, beamTrails, mapPickups } = state
 
   ctx.fillStyle = '#1a1a2e'
   ctx.fillRect(0, 0, canvasWidth, canvasHeight)
@@ -29,11 +29,14 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   // 寒氣區域（在敵人/投射物之下）
   for (const cz of coldZones) drawColdZone(ctx, cz, now)
 
-  // 地雷（在敵人之下）
-  for (const mine of iceSpikeMines) drawIceSpikeMine(ctx, mine, now)
+  // 凍土地雷（在敵人之下）
+  for (const mine of iceSpikeMines) drawFrozenGroundMine(ctx, mine, now)
 
-  // 冰錐效果（在敵人之下）
-  for (const spike of iceSpikeEffects) drawIceSpikeEffect(ctx, spike, now)
+  // 凍土扇形區域（在敵人之下）
+  for (const zone of iceSpikeEffects) drawFrozenGroundZone(ctx, zone, now)
+
+  // 碎冰飛濺小冰刺
+  for (const shard of frozenGroundShards) drawFrozenGroundShard(ctx, shard)
 
   // 共振波（在敵人之下）
   for (const wave of resonanceWaves) drawResonanceWave(ctx, wave, now)
@@ -51,6 +54,11 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   for (const beam of beamEffects) drawBeamEffect(ctx, beam, now)
 
   for (const enemy of enemies) drawEnemy(ctx, enemy)
+
+  // 地圖掉落物（強化碎片）
+  for (const p of mapPickups ?? []) drawMapPickup(ctx, p, now)
+
+  drawPlayerFacingIndicator(ctx, player, state.playerFacingAngle)
   for (const proj of projectiles) drawProjectile(ctx, proj)
   for (const fb of fireballProjectiles) drawFireballProjectile(ctx, fb)
 
@@ -62,6 +70,59 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   if (hud) {
     drawHud(ctx, canvasWidth, hud)
   }
+}
+
+/** 繪製地圖掉落物（強化碎片）：外框時鐘倒數，轉完消失 */
+function drawMapPickup(
+  ctx: CanvasRenderingContext2D,
+  pickup: GameState['mapPickups'][0],
+  now: number,
+) {
+  const { x, y } = pickup.position
+  const elapsed = now - pickup.createdAt
+  const duration = pickup.duration ?? 12000
+  const remaining = Math.max(0, 1 - elapsed / duration)
+  const pulse = 0.7 + 0.3 * Math.sin(elapsed / 400)
+  const colors = {
+    cooldown: '#4FC3F7',
+    range: '#81C784',
+    count: '#FFB74D',
+  }
+  const color = colors[pickup.type]
+  const labels = { cooldown: '冷卻', range: '範圍', count: '數量' }
+  const r = 16
+  const strokeW = 4
+
+  ctx.save()
+  ctx.globalAlpha = pulse
+
+  // 底色圓
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = color + '33'
+  ctx.fill()
+
+  // 外框倒數（12 點方向順時針，剩餘時間 = 弧長）
+  ctx.beginPath()
+  ctx.arc(x, y, r + strokeW / 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, false)
+  ctx.strokeStyle = color + '55'
+  ctx.lineWidth = strokeW
+  ctx.lineCap = 'round'
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.arc(x, y, r + strokeW / 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * remaining, false)
+  ctx.strokeStyle = color
+  ctx.lineWidth = strokeW
+  ctx.lineCap = 'round'
+  ctx.stroke()
+
+  ctx.fillStyle = color
+  ctx.font = 'bold 10px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(labels[pickup.type], x, y)
+  ctx.restore()
 }
 
 /** 繪製 HUD（無限模式用） */
@@ -148,6 +209,42 @@ export function drawGrid(ctx: CanvasRenderingContext2D, w: number, h: number) {
   for (let y = 0; y <= h; y += step) {
     ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke()
   }
+}
+
+/** 繪製主角前方指示（尖角形：三圓角＋一尖端） */
+function drawPlayerFacingIndicator(ctx: CanvasRenderingContext2D, player: GameState['player'], facingAngle: number) {
+  const len = 50
+  const halfAngle = (32 * Math.PI) / 180
+  const cornerRad = 14
+  const x = player.position.x
+  const y = player.position.y
+
+  const tipX = x + Math.cos(facingAngle) * len
+  const tipY = y + Math.sin(facingAngle) * len
+  const leftAngle = facingAngle - halfAngle
+  const rightAngle = facingAngle + halfAngle
+  const baseLen = len * 0.4
+  const baseLeft = { x: x + Math.cos(leftAngle) * baseLen, y: y + Math.sin(leftAngle) * baseLen }
+  const baseRight = { x: x + Math.cos(rightAngle) * baseLen, y: y + Math.sin(rightAngle) * baseLen }
+  const backCenter = { x: x - Math.cos(facingAngle) * len * 0.2, y: y - Math.sin(facingAngle) * len * 0.2 }
+
+  ctx.save()
+  ctx.globalAlpha = 0.4
+
+  ctx.beginPath()
+  ctx.moveTo(tipX, tipY)
+  ctx.lineTo(baseLeft.x, baseLeft.y)
+  ctx.quadraticCurveTo(backCenter.x - Math.cos(leftAngle) * cornerRad, backCenter.y - Math.sin(leftAngle) * cornerRad, backCenter.x, backCenter.y)
+  ctx.quadraticCurveTo(backCenter.x - Math.cos(rightAngle) * cornerRad, backCenter.y - Math.sin(rightAngle) * cornerRad, baseRight.x, baseRight.y)
+  ctx.lineTo(tipX, tipY)
+  ctx.closePath()
+  ctx.fillStyle = 'rgba(100, 200, 255, 0.35)'
+  ctx.fill()
+  ctx.strokeStyle = 'rgba(150, 220, 255, 0.55)'
+  ctx.lineWidth = 1.5
+  ctx.stroke()
+
+  ctx.restore()
 }
 
 export function drawPlayer(ctx: CanvasRenderingContext2D, player: GameState['player'], invincibleUntil?: number) {
@@ -351,88 +448,94 @@ export function drawColdZone(
   ctx.restore()
 }
 
-/** 繪製單根冰錐柱 */
-export function drawIcePillar(ctx: CanvasRenderingContext2D, pos: { x: number; y: number }, scale = 1) {
-  const h = 16 * scale
-  const w = 6 * scale
-
-  ctx.beginPath()
-  ctx.moveTo(pos.x, pos.y - h)
-  ctx.lineTo(pos.x - w, pos.y + 2)
-  ctx.lineTo(pos.x - w * 0.3, pos.y + h * 0.4)
-  ctx.lineTo(pos.x + w * 0.3, pos.y + h * 0.4)
-  ctx.lineTo(pos.x + w, pos.y + 2)
-  ctx.closePath()
-
-  const gradient = ctx.createLinearGradient(pos.x, pos.y - h, pos.x, pos.y + h * 0.4)
-  gradient.addColorStop(0, 'rgba(180, 230, 255, 0.9)')
-  gradient.addColorStop(0.5, 'rgba(100, 200, 255, 0.7)')
-  gradient.addColorStop(1, 'rgba(60, 160, 220, 0.4)')
-  ctx.fillStyle = gradient
-  ctx.fill()
-
-  ctx.strokeStyle = 'rgba(200, 240, 255, 0.6)'
-  ctx.lineWidth = 1
-  ctx.stroke()
-
-  // 底部光暈
-  const glow = ctx.createRadialGradient(pos.x, pos.y + 2, 0, pos.x, pos.y + 2, 12 * scale)
-  glow.addColorStop(0, 'rgba(100, 200, 255, 0.3)')
-  glow.addColorStop(1, 'rgba(100, 200, 255, 0)')
-  ctx.beginPath()
-  ctx.arc(pos.x, pos.y + 2, 12 * scale, 0, Math.PI * 2)
-  ctx.fillStyle = glow
-  ctx.fill()
-}
-
-export function drawIceSpikeEffect(
+/** 繪製凍土扇形區域 */
+export function drawFrozenGroundZone(
   ctx: CanvasRenderingContext2D,
-  effect: GameState['iceSpikeEffects'][0],
+  zone: GameState['iceSpikeEffects'][0],
   now: number,
 ) {
-  const elapsed = now - effect.createdAt
-  const progress = elapsed / effect.duration
-  const alpha = Math.max(0, 1 - progress)
+  const elapsed = now - zone.createdAt
+  const progress = elapsed / zone.duration
+  const alpha = Math.max(0, 1 - progress * 0.3) * 0.6 * (zone.isSpreadZone ? 0.7 : 1)
 
   ctx.save()
   ctx.globalAlpha = alpha
 
-  // 牢籠模式：繪製環形連線
-  if (effect.isCage && effect.pillarPositions.length > 2) {
+  const { origin, direction, arcAngle, radius, isCage, doubleHitFlashUntil } = zone
+  const showDoubleHitFlash = doubleHitFlashUntil != null && now < doubleHitFlashUntil
+
+  if (isCage) {
     ctx.beginPath()
-    const ps = effect.pillarPositions
-    ctx.moveTo(ps[0].x, ps[0].y)
-    for (let i = 1; i < ps.length; i++) {
-      ctx.lineTo(ps[i].x, ps[i].y)
-    }
-    ctx.closePath()
-    ctx.strokeStyle = 'rgba(100, 200, 255, 0.25)'
+    ctx.arc(origin.x, origin.y, radius, 0, Math.PI * 2)
+    const grad = ctx.createRadialGradient(origin.x, origin.y, 0, origin.x, origin.y, radius)
+    grad.addColorStop(0, 'rgba(100, 200, 255, 0.12)')
+    grad.addColorStop(1, 'rgba(60, 160, 220, 0.04)')
+    ctx.fillStyle = grad
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.35)'
     ctx.lineWidth = 2
     ctx.stroke()
-
-    // 牢籠內部填充
-    ctx.fillStyle = 'rgba(100, 200, 255, 0.05)'
+  } else {
+    const halfArc = (arcAngle * Math.PI) / 180 / 2
+    const a1 = direction - halfArc
+    const a2 = direction + halfArc
+    ctx.beginPath()
+    ctx.moveTo(origin.x, origin.y)
+    ctx.arc(origin.x, origin.y, radius, a1, a2)
+    ctx.closePath()
+    const grad = ctx.createRadialGradient(origin.x, origin.y, 0, origin.x, origin.y, radius)
+    grad.addColorStop(0, 'rgba(100, 200, 255, 0.15)')
+    grad.addColorStop(0.6, 'rgba(80, 180, 240, 0.08)')
+    grad.addColorStop(1, 'rgba(60, 160, 220, 0.03)')
+    ctx.fillStyle = grad
     ctx.fill()
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.4)'
+    ctx.lineWidth = 1.5
+    ctx.stroke()
   }
 
-  // 主冰錐柱
-  for (const pos of effect.pillarPositions) {
-    drawIcePillar(ctx, pos)
-  }
-
-  // 蔓延冰錐柱（較小、較暗）
-  for (const pos of effect.spreadPillarPositions) {
+  if (showDoubleHitFlash) {
     ctx.save()
-    ctx.globalAlpha = alpha * 0.65
-    drawIcePillar(ctx, pos, 0.75)
+    const flashAlpha = (doubleHitFlashUntil! - now) / 200 * 0.5
+    ctx.globalAlpha = flashAlpha
+    if (isCage) {
+      ctx.beginPath()
+      ctx.arc(origin.x, origin.y, radius, 0, Math.PI * 2)
+      ctx.fillStyle = 'rgba(200, 255, 255, 0.6)'
+      ctx.fill()
+    } else {
+      const halfArc = (arcAngle * Math.PI) / 180 / 2
+      ctx.beginPath()
+      ctx.moveTo(origin.x, origin.y)
+      ctx.arc(origin.x, origin.y, radius, direction - halfArc, direction + halfArc)
+      ctx.closePath()
+      ctx.fillStyle = 'rgba(200, 255, 255, 0.5)'
+      ctx.fill()
+    }
     ctx.restore()
   }
 
   ctx.restore()
 }
 
-/** 繪製地雷（脈衝圓環） */
-export function drawIceSpikeMine(
+/** 繪製碎冰飛濺小冰刺 */
+export function drawFrozenGroundShard(
+  ctx: CanvasRenderingContext2D,
+  shard: GameState['frozenGroundShards'][0],
+) {
+  const alpha = Math.max(0, 1 - shard.traveled / shard.maxDistance)
+  ctx.save()
+  ctx.globalAlpha = alpha * 0.8
+  ctx.beginPath()
+  ctx.arc(shard.position.x, shard.position.y, 4, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(150, 220, 255, 0.9)'
+  ctx.fill()
+
+  ctx.restore()
+}
+
+/** 繪製凍土地雷（潛伏時脈衝圓環；非牢籠時顯示觸發方向） */
+export function drawFrozenGroundMine(
   ctx: CanvasRenderingContext2D,
   mine: GameState['iceSpikeMines'][0],
   now: number,
@@ -447,7 +550,6 @@ export function drawIceSpikeMine(
   ctx.save()
   ctx.globalAlpha = 0.3 + pulse * 0.2
 
-  // 偵測範圍
   ctx.beginPath()
   ctx.arc(x, y, r + 4, 0, Math.PI * 2)
   ctx.strokeStyle = 'rgba(100, 200, 255, 0.4)'
@@ -461,6 +563,23 @@ export function drawIceSpikeMine(
   ctx.arc(x, y, 4, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(150, 220, 255, 0.6)'
   ctx.fill()
+
+  // 非牢籠：繪製觸發方向（扇形示意）
+  if (!mine.isCage) {
+    const dir = mine.direction
+    const halfArc = (mine.arcAngle * Math.PI) / 180 / 2
+    const startAngle = dir - halfArc
+    const endAngle = dir + halfArc
+    ctx.beginPath()
+    ctx.moveTo(x, y)
+    ctx.arc(x, y, r * 0.7, startAngle, endAngle)
+    ctx.closePath()
+    ctx.strokeStyle = 'rgba(100, 200, 255, 0.5)'
+    ctx.lineWidth = 2
+    ctx.stroke()
+    ctx.fillStyle = 'rgba(100, 200, 255, 0.08)'
+    ctx.fill()
+  }
 
   // 微弱光暈
   const glow = ctx.createRadialGradient(x, y, 0, x, y, r)
@@ -778,28 +897,25 @@ export function drawBeamRect(
   ctx.restore()
 }
 
-/** 繪製光束效果（含子光束、脈衝、過載） */
+/** 繪製光束效果（v3：脈衝制，含子光束、過載） */
 export function drawBeamEffect(
   ctx: CanvasRenderingContext2D,
   beam: GameState['beamEffects'][0],
   now: number,
 ) {
   const elapsed = now - beam.createdAt
-  const progress = elapsed / beam.duration
 
-  // 能量過載狀態
   const timeRemaining = beam.duration - elapsed
   const isOverloaded = beam.hasOverload && timeRemaining <= 500
   const widthMul = isOverloaded ? 2 : 1
 
-  // 脈衝模式：閃爍效果
-  let alpha: number
-  if (beam.isPulseMode) {
-    const sincePulse = now - beam.lastPulseTime
-    alpha = sincePulse < 80 ? 1 : Math.max(0.1, 0.3 - (sincePulse - 80) / 300)
-  } else {
-    alpha = Math.max(0, 1 - progress * 0.4)
-  }
+  const progress = elapsed / beam.duration
+  const alpha = beam.singleShot
+    ? Math.max(0.4, 1 - progress * 0.8)
+    : (() => {
+        const sincePulse = now - beam.lastPulseTime
+        return sincePulse < 80 ? 1 : Math.max(0.1, 0.3 - (sincePulse - 80) / beam.pulseInterval)
+      })()
 
   const { origin, angle, range, width } = beam
   const effectiveWidth = width * widthMul
