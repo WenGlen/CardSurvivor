@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, useMemo, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo, type MouseEvent as ReactMouseEvent, type CSSProperties } from 'react'
 import MobileTouchControls from '../components/MobileTouchControls'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { GameEngine } from '../models/GameEngine'
@@ -18,8 +18,12 @@ import {
 import type { CardDefinition, ArrowInstance, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from '../models/cards'
 import { drawGame } from '../rendering/drawFunctions'
 
-const CANVAS_WIDTH = 800
-const CANVAS_HEIGHT = 600
+/** 練習場地圖：直式 4:3（與無限模式一致），主角可移動範圍限制在此 */
+const PRACTICE_MAP_WIDTH = 600
+const PRACTICE_MAP_HEIGHT = 800 // 直式 4:3 = 寬:高 = 3:4
+const CANVAS_WIDTH = PRACTICE_MAP_WIDTH
+const CANVAS_HEIGHT = PRACTICE_MAP_HEIGHT
+const MAP_ASPECT_RATIO = '3 / 4'
 
 /** 練習場畫面 - 不動敵人 + 可操控主角 + 右側卡片堆疊面板 */
 export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
@@ -220,41 +224,176 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
     }
   }
 
-  return (
-    <div className="flex flex-col md:flex-row h-[100dvh] min-h-0 overflow-hidden bg-gray-900 text-white select-none">
-      {/* 左側：遊戲區域 + 數值面板 */}
-      <div className="flex-1 flex flex-col items-center justify-center gap-2 md:gap-3 p-2 md:p-4 min-h-0 overflow-hidden">
-        {/* Canvas */}
-        <div className="relative shrink-0 max-w-full max-h-[50vh] md:max-h-none flex items-center justify-center">
-          <canvas
-            ref={canvasRef}
-            width={CANVAS_WIDTH}
-            height={CANVAS_HEIGHT}
-            className="rounded-lg border border-gray-700 max-w-full max-h-full object-contain"
-            onMouseDown={handleCanvasMouseDown}
-            onMouseMove={handleCanvasMouseMove}
-            onMouseUp={handleCanvasMouseUp}
-            onMouseLeave={handleCanvasMouseLeave}
-          />
-          <div className="absolute bottom-2 left-2 text-[10px] md:text-xs text-gray-500">
-            {isMobile ? '虛擬搖桿移動 · ' : 'WASD 移動 · '}拖曳木樁可移動位置
-          </div>
-          {isMobile && (
-            <MobileTouchControls
-              onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
-              onEnd={() => engineRef.current?.setMoveInput(null, null)}
-              size={90}
-            />
-          )}
-          <div className="absolute top-2 left-2 flex gap-2">
+  const btnStyle: CSSProperties = {
+    background: '#333', color: '#fff', border: 'none', borderRadius: 6,
+    padding: '6px 16px', cursor: 'pointer', fontSize: 14, fontFamily: 'monospace',
+  }
+
+  // 手機版：比照無限模式 — 上選單、地圖全寬、下為技能區(左2/3) + 搖桿與暫停(右1/3)
+  if (isMobile) {
+    return (
+      <div style={{
+        display: 'flex', flexDirection: 'column', width: '100%', height: '100%', minHeight: '100dvh',
+        overflow: 'hidden', fontFamily: 'monospace', color: '#e0e0e0', background: '#0d0d1a',
+      }}>
+        {/* 頂部：返回 | Card Survivor 置中 | 模式靠右 */}
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 12px', borderBottom: '1px solid #333', background: '#0d0d1a',
+        }}>
+          <div style={{ flexShrink: 0 }}>
             {onExit && (
-              <button
-                onClick={() => { engineRef.current?.stop(); onExit() }}
-                className="px-3 py-1.5 text-xs bg-gray-700 hover:bg-gray-600 rounded transition-colors"
-              >
-                回到選單
+              <button onClick={() => { engineRef.current?.stop(); onExit() }} style={{ ...btnStyle, padding: '6px 12px', fontSize: 12 }}>
+                ← 返回
               </button>
             )}
+          </div>
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <span style={{ fontSize: 14, color: '#aaa' }}>Card Survivor</span>
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 'bold', flexShrink: 0 }}>練習場</span>
+        </div>
+
+        {/* 地圖區：全寬、1:1 正方形（padding-bottom  hack 確保高度 = 寬度） */}
+        <div style={{
+          flexShrink: 0, width: '100%', background: '#0d0d1a',
+          border: '2px solid #333', boxSizing: 'border-box',
+        }}>
+          <div style={{ width: '100%', paddingBottom: '100%', position: 'relative', height: 0, boxSizing: 'border-box' }}>
+            <div style={{
+              position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+            }}>
+              <canvas
+                ref={canvasRef}
+                width={CANVAS_WIDTH}
+                height={CANVAS_HEIGHT}
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                onMouseDown={handleCanvasMouseDown}
+                onMouseMove={handleCanvasMouseMove}
+                onMouseUp={handleCanvasMouseUp}
+                onMouseLeave={handleCanvasMouseLeave}
+              />
+              <div style={{ position: 'absolute', bottom: 6, left: 6, fontSize: 9, color: '#555' }}>
+                虛擬搖桿移動 · 拖曳木樁可移動
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* 地圖下方：敵人設置（緊湊一排） */}
+        <div style={{
+          flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+          padding: '6px 10px', fontSize: 10, background: '#15152a', borderBottom: '1px solid #2a2a3e',
+        }}>
+          <span style={{ color: '#aaa' }}>木樁 HP:</span>
+          {[50, 200, 9999].map((hp) => (
+            <button
+              key={hp}
+              onClick={() => { setEnemyHp(hp); engineRef.current?.setEnemyMaxHp(hp) }}
+              style={{ ...btnStyle, padding: '3px 8px', fontSize: 10, ...(enemyHp === hp ? { background: '#0d7377' } : {}) }}
+            >
+              {hp}
+            </button>
+          ))}
+          <span style={{ width: 1, height: 12, background: '#333' }} />
+          <button onClick={handleAddEnemy} style={{ ...btnStyle, padding: '3px 8px', fontSize: 10 }}>+ 木樁</button>
+          <button onClick={handleAddMovingEnemy} style={{ ...btnStyle, padding: '3px 8px', fontSize: 10, background: '#b45309' }}>+ 移動</button>
+          <button onClick={handleRemoveEnemy} style={{ ...btnStyle, padding: '3px 8px', fontSize: 10 }}>- 木樁</button>
+          <button onClick={handleReset} style={{ ...btnStyle, padding: '3px 8px', fontSize: 10 }}>重置</button>
+        </div>
+
+        {/* 技能切換 + 數值區：左右撐滿，不與卡槽放一起 */}
+        <div style={{ flexShrink: 0, width: '100%', borderBottom: '1px solid #333', background: '#0d0d1a' }}>
+          <div style={{ display: 'flex', borderBottom: '1px solid #333' }}>
+            {[
+              { id: 'ice-arrow', name: '冰箭' },
+              { id: 'ice-spike', name: '凍土' },
+              { id: 'fireball', name: '火球' },
+              { id: 'beam', name: '光束' },
+            ].map((skill) => (
+              <button
+                key={skill.id}
+                onClick={() => handleSwitchSkill(skill.id)}
+                style={{
+                  flex: 1, padding: '10px 6px', fontSize: 12, fontWeight: 'bold', border: 'none', cursor: 'pointer', fontFamily: 'monospace',
+                  background: activeSkillId === skill.id ? '#1a1a2e' : 'transparent',
+                  color: activeSkillId === skill.id ? '#4FC3F7' : '#888',
+                  borderBottom: activeSkillId === skill.id ? '2px solid #4FC3F7' : '2px solid transparent',
+                }}
+              >
+                {skill.name}
+              </button>
+            ))}
+          </div>
+          <div style={{ padding: '8px 12px', background: '#15152a', maxHeight: 140, overflow: 'auto' }}>
+            <div style={{ fontSize: 10, color: '#666', textAlign: 'center', marginBottom: 6 }}>卡片順序不同 → 效果不同</div>
+            {activeSkillId === 'ice-arrow' ? (
+              <SnapshotPreview arrows={iceArrowSnap.arrows} cooldown={iceArrowSnap.cooldown} />
+            ) : activeSkillId === 'ice-spike' ? (
+              <IceSpikePreview snapshot={iceSpikeSnap} />
+            ) : activeSkillId === 'fireball' ? (
+              <FireballPreview snapshot={fireballSnap} />
+            ) : (
+              <BeamPreview snapshot={beamSnap} />
+            )}
+          </div>
+        </div>
+
+        {/* 底部：左 2/3 卡槽＋可用卡片 | 右 1/3 搖桿 + 暫停 */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', padding: 6, gap: 8, background: '#0d0d1a' }}>
+          {/* 左 2/3：僅卡片插槽 + 可用卡片（可捲動） */}
+          <div style={{ flex: 2, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '6px 0' }}>
+              <section style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, fontWeight: 'bold', color: '#4FC3F7' }}>卡片插槽</span>
+                  {cardSlot.length > 0 && (
+                    <button onClick={handleClearSlot} style={{ ...btnStyle, padding: '2px 6px', fontSize: 9, background: 'transparent', color: '#888' }}>清空</button>
+                  )}
+                </div>
+                {cardSlot.length === 0 ? (
+                  <div style={{ fontSize: 9, color: '#555', textAlign: 'center', padding: 8, border: '1px dashed #333', borderRadius: 4 }}>從下方選擇卡片加入</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {cardSlot.map((card, i) => (
+                      <SlotCardItem
+                        key={`${card.id}-${i}`}
+                        card={card}
+                        index={i}
+                        total={cardSlot.length}
+                        onRemove={() => handleRemoveCard(i)}
+                        onMoveUp={() => handleMoveCard(i, -1)}
+                        onMoveDown={() => handleMoveCard(i, 1)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+              <section>
+                <span style={{ fontSize: 10, fontWeight: 'bold', color: '#4FC3F7' }}>可用卡片</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : beamCards).map((card) => (
+                    <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
+                  ))}
+                </div>
+              </section>
+            </div>
+          </div>
+
+          {/* 右 1/3：搖桿 + 暫停 */}
+          <div style={{
+            flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center',
+            gap: 8, justifyContent: 'space-between',
+          }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <MobileTouchControls
+                onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
+                onEnd={() => engineRef.current?.setMoveInput(null, null)}
+                size={90}
+                placement="center"
+              />
+            </div>
             <button
               onClick={() => {
                 setPaused((p) => {
@@ -263,150 +402,236 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
                   return !p
                 })
               }}
-              className={`px-3 py-1.5 text-xs rounded transition-colors ${paused ? 'bg-amber-700 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+              style={{ ...btnStyle, padding: '10px 20px', fontSize: 12, flexShrink: 0 }}
             >
-              {paused ? '繼續' : '暫停'}
-            </button>
-          </div>
-        </div>
-
-        {/* 快照預覽 + 控制列 */}
-        <div className="w-full max-w-[800px] shrink-0 flex flex-col gap-2">
-          {activeSkillId === 'ice-arrow' ? (
-            <SnapshotPreview arrows={iceArrowSnap.arrows} cooldown={iceArrowSnap.cooldown} />
-          ) : activeSkillId === 'ice-spike' ? (
-            <IceSpikePreview snapshot={iceSpikeSnap} />
-          ) : activeSkillId === 'fireball' ? (
-            <FireballPreview snapshot={fireballSnap} />
-          ) : (
-            <BeamPreview snapshot={beamSnap} />
-          )}
-
-          {/* 控制列 */}
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-gray-400 shrink-0">木樁 HP:</span>
-            {[50, 200, 9999].map((hp) => (
-              <button
-                key={hp}
-                onClick={() => { setEnemyHp(hp); engineRef.current?.setEnemyMaxHp(hp) }}
-                className={`px-3 py-1 text-xs rounded transition-colors ${
-                  enemyHp === hp ? 'bg-cyan-700 text-white' : 'bg-gray-700 hover:bg-gray-600'
-                }`}
-              >
-                {hp}
-              </button>
-            ))}
-            <div className="w-px h-5 bg-gray-700 mx-1" />
-            <button
-              onClick={handleAddEnemy}
-              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
-            >
-              + 木樁
-            </button>
-            <button
-              onClick={handleAddMovingEnemy}
-              className="px-3 py-1 bg-orange-900/50 hover:bg-orange-800/50 rounded text-xs text-orange-300 transition-colors"
-            >
-              + 移動
-            </button>
-            <button
-              onClick={handleRemoveEnemy}
-              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
-            >
-              - 木樁
-            </button>
-            <div className="w-px h-5 bg-gray-700 mx-1" />
-            <button
-              onClick={handleReset}
-              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs transition-colors"
-            >
-              重置場景
+              {paused ? '▶ 繼續' : '⏸ 暫停'}
             </button>
           </div>
         </div>
       </div>
+    )
+  }
 
-      {/* 右側：卡片專區 */}
-      <div className="w-full md:w-72 bg-gray-800 border-t md:border-t-0 md:border-l border-gray-700 flex flex-col overflow-hidden min-h-0 max-h-[50vh] md:max-h-none flex-1 md:flex-initial">
-        {/* 技能切換 Tab */}
-        <div className="flex border-b border-gray-700">
-          {([
-            { id: 'ice-arrow', name: '冰箭' },
-            { id: 'ice-spike', name: '凍土' },
-            { id: 'fireball', name: '火球' },
-            { id: 'beam', name: '光束' },
-          ] as const).map((skill) => (
-            <button
-              key={skill.id}
-              onClick={() => handleSwitchSkill(skill.id)}
-              className={`flex-1 py-2.5 text-sm font-bold text-center transition-colors ${
-                activeSkillId === skill.id
-                  ? 'bg-gray-700 text-cyan-300 border-b-2 border-cyan-400'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-750'
-              }`}
-            >
-              {skill.name}
-            </button>
-          ))}
+  // 桌機版
+  return (
+    <div style={{
+      width: '100%', minHeight: '100dvh', fontFamily: 'monospace', color: '#e0e0e0',
+      background: '#2a2a3a', display: 'flex', justifyContent: 'center', alignItems: 'flex-start',
+    }}>
+      <div style={{
+        display: 'flex', flexDirection: 'column', width: '100%', maxWidth: 1200, height: '100dvh',
+        overflow: 'hidden', background: '#0d0d1a',
+      }}>
+        {/* 頂部：返回 | Card Survivor 置中 | 模式靠右 */}
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 12px', borderBottom: '1px solid #333', background: '#0d0d1a',
+        }}>
+          <div style={{ flexShrink: 0 }}>
+            {onExit && (
+              <button onClick={() => { engineRef.current?.stop(); onExit() }} style={btnStyle}>
+                ← 返回
+              </button>
+            )}
+          </div>
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <span style={{ fontSize: 14, color: '#aaa' }}>Card Survivor</span>
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 'bold', flexShrink: 0 }}>練習場</span>
         </div>
 
-        {/* 副標題 */}
-        <div className="px-3 py-2 border-b border-gray-700">
-          <p className="text-xs text-gray-400 text-center">
-            卡片順序不同 → 效果不同
-          </p>
-        </div>
-
-        {/* 可滾動區域 */}
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-4">
-          {/* 卡片插槽 */}
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-semibold text-cyan-300">卡片插槽</h3>
-              {cardSlot.length > 0 && (
-                <button
-                  onClick={handleClearSlot}
-                  className="text-xs text-gray-500 hover:text-red-400 transition-colors"
-                >
-                  清空
-                </button>
-              )}
+        {/* 主體：左地圖＋敵人控制 | 右技能測試＋控制鈕 */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'row' }}>
+          {/* 左側：地圖區 + 地圖下方敵人設置 */}
+          <div style={{
+            flex: 2, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
+            background: '#0d0d1a',
+          }}>
+            {/* 地圖區：直式 4:3 */}
+            <div style={{
+              flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 8,
+            }}>
+              <div style={{
+                position: 'relative',
+                width: '100%',
+                height: '100%',
+                maxWidth: '100%',
+                maxHeight: '100%',
+                aspectRatio: MAP_ASPECT_RATIO,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                overflow: 'hidden',
+                border: '2px solid #333',
+                boxSizing: 'border-box',
+                borderRadius: 8,
+              }}>
+                <canvas
+                  ref={canvasRef}
+                  width={CANVAS_WIDTH}
+                  height={CANVAS_HEIGHT}
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  onMouseDown={handleCanvasMouseDown}
+                  onMouseMove={handleCanvasMouseMove}
+                  onMouseUp={handleCanvasMouseUp}
+                  onMouseLeave={handleCanvasMouseLeave}
+                />
+                <div style={{ position: 'absolute', bottom: 8, left: 8, fontSize: 10, color: '#666' }}>
+                  {isMobile ? '虛擬搖桿移動 · ' : 'WASD 移動 · '}拖曳木樁可移動位置
+                </div>
+              </div>
             </div>
 
-            {cardSlot.length === 0 ? (
-              <div className="text-xs text-gray-500 text-center py-4 border border-dashed border-gray-600 rounded-lg">
-                從下方選擇卡片加入
-              </div>
-            ) : (
-              <div className="flex flex-col gap-1">
-                {cardSlot.map((card, i) => (
-                  <SlotCardItem
-                    key={`${card.id}-${i}`}
-                    card={card}
-                    index={i}
-                    total={cardSlot.length}
-                    onRemove={() => handleRemoveCard(i)}
-                    onMoveUp={() => handleMoveCard(i, -1)}
-                    onMoveDown={() => handleMoveCard(i, 1)}
-                  />
-                ))}
-              </div>
-            )}
-          </section>
+            {/* 地圖下方：敵人設置 */}
+            <div style={{
+              flexShrink: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8,
+              padding: '8px 12px', borderTop: '1px solid #333', background: '#15152a', fontSize: 12,
+            }}>
+              <span style={{ color: '#aaa' }}>木樁 HP:</span>
+              {[50, 200, 9999].map((hp) => (
+                <button
+                  key={hp}
+                  onClick={() => { setEnemyHp(hp); engineRef.current?.setEnemyMaxHp(hp) }}
+                  style={{
+                    ...btnStyle,
+                    padding: '4px 10px',
+                    fontSize: 11,
+                    ...(enemyHp === hp ? { background: '#0d7377', color: '#fff' } : {}),
+                  }}
+                >
+                  {hp}
+                </button>
+              ))}
+              <span style={{ width: 1, height: 16, background: '#333', margin: '0 4px' }} />
+              <button onClick={handleAddEnemy} style={{ ...btnStyle, padding: '4px 10px', fontSize: 11 }}>+ 木樁</button>
+              <button
+                onClick={handleAddMovingEnemy}
+                style={{ ...btnStyle, padding: '4px 10px', fontSize: 11, background: '#b45309', color: '#fff' }}
+              >
+                + 移動
+              </button>
+              <button onClick={handleRemoveEnemy} style={{ ...btnStyle, padding: '4px 10px', fontSize: 11 }}>- 木樁</button>
+              <span style={{ width: 1, height: 16, background: '#333', margin: '0 4px' }} />
+              <button onClick={handleReset} style={{ ...btnStyle, padding: '4px 10px', fontSize: 11 }}>重置場景</button>
+            </div>
+          </div>
 
-          {/* 可用卡片 */}
-          <section>
-            <h3 className="text-sm font-semibold text-cyan-300 mb-2">可用卡片</h3>
-            <div className="flex flex-col gap-2">
-              {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : beamCards).map((card) => (
-                <AvailableCard
-                  key={card.id}
-                  card={card}
-                  onAdd={() => handleAddCard(card)}
-                />
+          {/* 右側：技能測試區（Tab、快照、插槽、可用卡片）+ 右下控制鈕 */}
+          <div style={{
+            flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column',
+            background: '#0d0d1a', borderLeft: '1px solid #333',
+          }}>
+            {/* 技能切換 Tab */}
+            <div style={{ display: 'flex', flexShrink: 0, borderBottom: '1px solid #333' }}>
+              {([
+                { id: 'ice-arrow', name: '冰箭' },
+                { id: 'ice-spike', name: '凍土' },
+                { id: 'fireball', name: '火球' },
+                { id: 'beam', name: '光束' },
+              ] as const).map((skill) => (
+                <button
+                  key={skill.id}
+                  onClick={() => handleSwitchSkill(skill.id)}
+                  style={{
+                    flex: 1, padding: '10px 8px', fontSize: 12, fontWeight: 'bold',
+                    border: 'none', cursor: 'pointer', fontFamily: 'monospace',
+                    background: activeSkillId === skill.id ? '#1a1a2e' : 'transparent',
+                    color: activeSkillId === skill.id ? '#4FC3F7' : '#888',
+                    borderBottom: activeSkillId === skill.id ? '2px solid #4FC3F7' : '2px solid transparent',
+                  }}
+                >
+                  {skill.name}
+                </button>
               ))}
             </div>
-          </section>
+
+            <div style={{ padding: '8px 10px', borderBottom: '1px solid #333' }}>
+              <p style={{ fontSize: 10, color: '#666', textAlign: 'center', margin: 0 }}>卡片順序不同 → 效果不同</p>
+            </div>
+
+            {/* 快照預覽 + 卡片插槽 + 可用卡片（可捲動） */}
+            <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {activeSkillId === 'ice-arrow' ? (
+                <SnapshotPreview arrows={iceArrowSnap.arrows} cooldown={iceArrowSnap.cooldown} />
+              ) : activeSkillId === 'ice-spike' ? (
+                <IceSpikePreview snapshot={iceSpikeSnap} />
+              ) : activeSkillId === 'fireball' ? (
+                <FireballPreview snapshot={fireballSnap} />
+              ) : (
+                <BeamPreview snapshot={beamSnap} />
+              )}
+
+              <section>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <h3 style={{ fontSize: 12, fontWeight: 'bold', color: '#4FC3F7', margin: 0 }}>卡片插槽</h3>
+                  {cardSlot.length > 0 && (
+                    <button onClick={handleClearSlot} style={{ ...btnStyle, padding: '2px 8px', fontSize: 10, background: 'transparent', color: '#888' }}>
+                      清空
+                    </button>
+                  )}
+                </div>
+                {cardSlot.length === 0 ? (
+                  <div style={{ fontSize: 11, color: '#555', textAlign: 'center', padding: 12, border: '1px dashed #333', borderRadius: 6 }}>
+                    從下方選擇卡片加入
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {cardSlot.map((card, i) => (
+                      <SlotCardItem
+                        key={`${card.id}-${i}`}
+                        card={card}
+                        index={i}
+                        total={cardSlot.length}
+                        onRemove={() => handleRemoveCard(i)}
+                        onMoveUp={() => handleMoveCard(i, -1)}
+                        onMoveDown={() => handleMoveCard(i, 1)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <h3 style={{ fontSize: 12, fontWeight: 'bold', color: '#4FC3F7', marginBottom: 6 }}>可用卡片</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : beamCards).map((card) => (
+                    <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
+                  ))}
+                </div>
+              </section>
+            </div>
+
+            {/* 右下：控制鈕（搖桿 + 暫停） */}
+            <div style={{
+              flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+              padding: 10, borderTop: '1px solid #333',
+            }}>
+              <MobileTouchControls
+                onMove={(dx, dy) => engineRef.current?.setMoveInput(dx, dy)}
+                onEnd={() => engineRef.current?.setMoveInput(null, null)}
+                size={90}
+                placement="center"
+              />
+              <button
+                onClick={() => {
+                  setPaused((p) => {
+                    if (p) engineRef.current?.resume()
+                    else engineRef.current?.pause()
+                    return !p
+                  })
+                }}
+                style={{
+                  ...btnStyle,
+                  padding: '10px 20px',
+                  fontSize: 12,
+                  ...(paused ? { background: '#4CAF50', color: '#fff' } : {}),
+                }}
+              >
+                {paused ? '▶ 繼續' : '⏸ 暫停'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

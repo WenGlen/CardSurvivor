@@ -121,7 +121,7 @@ export class GameEngine {
         hp: 100,
         maxHp: 100,
         speed: 160,
-        color: '#4FC3F7',
+        color: '#FFFFFF',
         frozenUntil: 0,
         frozenDamage: 0,
         slowUntil: 0,
