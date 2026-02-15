@@ -256,6 +256,56 @@ export interface BurningCorpse {
   duration: number
 }
 
+/** 環繞電球（主角身邊旋轉的電球） */
+export interface OrbitalOrb {
+  id: string
+  /** 當前軌道角度（弧度） */
+  angle: number
+  /** 旋轉半徑 px */
+  radius: number
+  /** 每觸碰傷害 */
+  touchDamage: number
+  /** 累計觸碰次數（雷暴核心用） */
+  touchCount: number
+  /** 是否暫停旋轉（EMP 時） */
+  paused: boolean
+  /** 暫停結束時間戳 */
+  pauseUntil: number
+  /** 是否正在附著敵人（電球吸附） */
+  attachedTo: string | null
+  /** 附著開始時間 */
+  attachStartTime: number
+  /** 是否已爆炸等待重生（雷暴核心） */
+  respawning: boolean
+  /** 重生時間戳 */
+  respawnAt: number
+  /** 銅卡：閃電連線 */
+  hasLightningChain: boolean
+  /** 銅卡：電球吸附 */
+  hasAttach: boolean
+  /** 銅卡：電磁脈衝 */
+  hasEmp: boolean
+  /** 銀卡：雷暴核心 */
+  hasStormCore: boolean
+  /** 銀卡：連線增幅 */
+  hasChainBoost: boolean
+  /** 銀卡：附著爆發 */
+  hasAttachBurst: boolean
+  /** 金卡：特斯拉線圈 */
+  hasTesla: boolean
+  /** 金卡：超導磁場 */
+  hasSuperconduct: boolean
+}
+
+/** 電球雷暴/附著爆發視覺效果 */
+export interface ElectricExplosion {
+  id: string
+  position: Position
+  radius: number
+  createdAt: number
+  duration: number
+}
+
 /** 光束效果（v3：預設單發 70 傷） */
 export interface BeamEffect {
   id: string

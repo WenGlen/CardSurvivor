@@ -49,3 +49,12 @@ export const BEAM_BASE = {
   pulseInterval: 250,
   singleShot: true,
 } as const
+
+/** 電球基礎參數（CardsDetail-v3：環繞物，主角身邊旋轉的電球） */
+export const ELECTRIC_BALL_BASE = {
+  damage: 20,
+  rotationSpeed: 180,
+  radius: 80,
+  count: 2,
+  paralyzeChance: 0.4,
+} as const

@@ -8,21 +8,25 @@ import type {
   IceArrowSnapshot,
   IceSpikeSnapshot,
   FireballSnapshot,
+  ElectricBallSnapshot,
   BeamSnapshot,
   ArrowInstance,
   FireballInstance,
+  ElectricBallInstance,
   BeamInstance,
 } from './cards'
 import {
   ICE_ARROW_CARD,
   ICE_SPIKE_CARD,
   FIREBALL_CARD,
+  ELECTRIC_BALL_BASE,
   BEAM_CARD,
 } from '../config'
 import {
   computeIceArrowSnapshotFromSequence,
   computeIceSpikeSnapshotFromSequence,
   computeFireballSnapshotFromSequence,
+  computeElectricBallSnapshotFromSequence,
   computeBeamSnapshotFromSequence,
 } from './infiniteSnapshot'
 import type { SlotItem } from './InfiniteGameLogic'
@@ -32,7 +36,8 @@ export const SKILL_ICONS: Record<string, string> = {
   'ice-arrow': '❄️',
   'ice-spike': '🧊',
   fireball: '🔥',
-  beam: '⚡',
+  'electric-ball': '⚡',
+  beam: '✧',
 }
 
 /** 取得技能圖示 */
@@ -112,6 +117,28 @@ export function formatFireballStatus(snapshot: FireballSnapshot): string[] {
   return [header, ...lines]
 }
 
+/** 電球：單顆效果 → 短標籤含數值（環繞物） */
+function formatElectricBallInstance(eb: ElectricBallInstance): string {
+  const tags: string[] = []
+  if (eb.hasLightningChain) tags.push('連線')
+  if (eb.hasAttach) tags.push('吸附')
+  if (eb.hasEmp) tags.push('EMP')
+  if (eb.hasStormCore) tags.push('雷暴')
+  if (eb.hasChainBoost) tags.push('增幅')
+  if (eb.hasAttachBurst) tags.push('爆發')
+  if (eb.hasTesla) tags.push('特斯拉')
+  if (eb.hasSuperconduct) tags.push('磁場')
+  return tags.length > 0 ? tags.join('＋') : '—'
+}
+
+/** 電球快照 → 數量＋半徑＋每顆一行（環繞物無冷卻） */
+export function formatElectricBallStatus(snapshot: ElectricBallSnapshot): string[] {
+  const r = snapshot.orbs[0]?.radius ?? ELECTRIC_BALL_BASE.radius
+  const header = `數量${snapshot.orbs.length} 半徑${r}px`
+  const lines = snapshot.orbs.map((eb) => `${SKILL_ICONS['electric-ball']} ${formatElectricBallInstance(eb)}`)
+  return [header, ...lines]
+}
+
 /** 光束：單道效果 → 短標籤含數值 */
 function formatBeamInstance(b: BeamInstance): string {
   const tags: string[] = []
@@ -142,6 +169,8 @@ export function getSlotStatusLines(skillId: string, items: SlotItem[]): string[]
       return formatIceSpikeStatus(computeIceSpikeSnapshotFromSequence(items))
     case 'fireball':
       return formatFireballStatus(computeFireballSnapshotFromSequence(items))
+    case 'electric-ball':
+      return formatElectricBallStatus(computeElectricBallSnapshotFromSequence(items))
     case 'beam':
       return formatBeamStatus(computeBeamSnapshotFromSequence(items))
     default:

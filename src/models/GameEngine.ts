@@ -1,5 +1,5 @@
-import type { Entity, Projectile, Position, DamageNumber, ColdZone, FrozenGroundZone, FrozenGroundMine, FrozenGroundShard, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, BeamEffect, BeamSegment, BeamTrail, SkillDefinition, MapPickup } from './types'
-import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from './cards'
+import type { Entity, Projectile, Position, DamageNumber, ColdZone, FrozenGroundZone, FrozenGroundMine, FrozenGroundShard, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, OrbitalOrb, ElectricExplosion, BeamEffect, BeamSegment, BeamTrail, SkillDefinition, MapPickup } from './types'
+import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, BeamSnapshot } from './cards'
 import {
   PICKUP_TYPE_WEIGHTS,
   PICKUP_DURATION_MS,
@@ -9,6 +9,8 @@ import {
   SLOW_MOVE_MULTIPLIER,
   COOLDOWN_MULTIPLIER_BOUNDS,
   RANGE_MULTIPLIER_BOUNDS,
+  ELECTRIC_BALL_BASE,
+  ELECTRIC_BALL_CARD,
 } from '../config'
 
 /** 遊戲模式設定（預設為練習場行為） */
@@ -54,6 +56,8 @@ export interface GameState {
   fireExplosions: FireExplosion[]
   lavaZones: LavaZone[]
   burningCorpses: BurningCorpse[]
+  orbitalOrbs: OrbitalOrb[]
+  electricExplosions: ElectricExplosion[]
   beamEffects: BeamEffect[]
   beamTrails: BeamTrail[]
   activeSkillId: string | null
@@ -78,6 +82,7 @@ export class GameEngine {
   private iceArrowSnapshot: IceArrowSnapshot | null = null
   private iceSpikeSnapshot: IceSpikeSnapshot | null = null
   private fireballSnapshot: FireballSnapshot | null = null
+  private electricBallSnapshot: ElectricBallSnapshot | null = null
   private beamSnapshot: BeamSnapshot | null = null
   private convergenceTracker: Map<string, { time: number; damage: number; hitCount: number }[]> = new Map()
   private enemyMaxHp = 9999
@@ -91,6 +96,8 @@ export class GameEngine {
   private cooldownMultiplier = 1
   private rangeMultiplier = 1
   private lastPickupSpawnTime = 0
+  /** 電球 EMP 上次釋放時間 */
+  private lastElectricBallEmpTime = 0
 
   constructor(canvasWidth: number, canvasHeight: number, onStateChange: () => void, modeConfig?: GameModeConfig) {
     this.onStateChange = onStateChange
@@ -140,6 +147,8 @@ export class GameEngine {
       fireExplosions: [],
       lavaZones: [],
       burningCorpses: [],
+      orbitalOrbs: [],
+      electricExplosions: [],
       beamEffects: [],
       beamTrails: [],
       activeSkillId: null,
@@ -170,6 +179,11 @@ export class GameEngine {
 
   setFireballSnapshot(snapshot: FireballSnapshot) {
     this.fireballSnapshot = snapshot
+  }
+
+  setElectricBallSnapshot(snapshot: ElectricBallSnapshot | null) {
+    this.electricBallSnapshot = snapshot
+    this.syncOrbitalOrbsFromSnapshot()
   }
 
   setBeamSnapshot(snapshot: BeamSnapshot) {
@@ -204,6 +218,14 @@ export class GameEngine {
     }
   }
 
+  /** 敵人是否在電球超導磁場內（減速 40%） */
+  private isEnemyInSuperconductZone(enemy: Entity): boolean {
+    const { orbitalOrbs, player } = this.state
+    const maxRadius = Math.max(0, ...orbitalOrbs.filter((o) => o.hasSuperconduct).map((o) => o.radius))
+    if (maxRadius <= 0) return false
+    return this.distance(enemy.position, player.position) < maxRadius + enemy.size
+  }
+
   /** 敵人是否在任一寒氣區域內（極寒領域減速 30%） */
   private isEnemyInColdZone(enemy: Entity): boolean {
     const now = performance.now()
@@ -226,7 +248,9 @@ export class GameEngine {
       if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) continue
       const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
       const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowMul = Math.min(slowByDebuff, slowByColdZone)
+      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
+      const superconductMul = 1 - slowBySuperconduct
+      const slowMul = Math.min(slowByDebuff, slowByColdZone, superconductMul < 1 ? superconductMul : 1)
       const dx = player.position.x - enemy.position.x
       const dy = player.position.y - enemy.position.y
       const dist = Math.sqrt(dx * dx + dy * dy)
@@ -341,6 +365,7 @@ export class GameEngine {
       case 'ice-arrow': return this.iceArrowSnapshot
       case 'ice-spike': return this.iceSpikeSnapshot
       case 'fireball': return this.fireballSnapshot
+      case 'electric-ball': return this.electricBallSnapshot
       case 'beam': return this.beamSnapshot
       default: return null
     }
@@ -353,6 +378,7 @@ export class GameEngine {
       case 'ice-arrow': base = this.iceArrowSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
       case 'ice-spike': base = this.iceSpikeSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
       case 'fireball': base = this.fireballSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
+      case 'electric-ball': base = 0; break
       case 'beam': base = this.beamSnapshot?.cooldown ?? (skill.initialStats.cooldown ?? 1); break
       default: base = skill.initialStats.cooldown ?? 1
     }
@@ -427,6 +453,7 @@ export class GameEngine {
     this.state.enemies = []
     this.state.projectiles = []
     this.state.fireballProjectiles = []
+    this.state.orbitalOrbs = []
     this.state.beamEffects = []
     this.state.beamTrails = []
     this.state.iceSpikeEffects = []
@@ -434,6 +461,7 @@ export class GameEngine {
     this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireExplosions = []
+    this.state.electricExplosions = []
     this.state.lavaZones = []
     this.state.burningCorpses = []
     this.state.coldZones = []
@@ -514,7 +542,9 @@ export class GameEngine {
 
     this.updateProjectiles(dt)
     this.updateFireballs(dt)
+    this.updateOrbitalOrbs(dt)
     this.updateFireExplosions()
+    this.updateElectricExplosions()
     this.updateLavaZones(dt)
     this.updateBurningCorpses(dt)
     this.updateBeamEffects(dt)
@@ -590,7 +620,9 @@ export class GameEngine {
       const p = enemy.patrol
       const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
       const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowMul = Math.min(slowByDebuff, slowByColdZone)
+      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
+      const superconductMul = 1 - slowBySuperconduct
+      const slowMul = Math.min(slowByDebuff, slowByColdZone, superconductMul < 1 ? superconductMul : 1)
       enemy.position.x += p.speed * p.direction * dt * slowMul
 
       if (enemy.position.x >= p.centerX + p.range) {
@@ -617,9 +649,11 @@ export class GameEngine {
           ? this.iceSpikeSnapshot.cooldown
           : activeSkillId === 'fireball' && this.fireballSnapshot
             ? this.fireballSnapshot.cooldown
-            : activeSkillId === 'beam' && this.beamSnapshot
-              ? this.beamSnapshot.cooldown
-              : (skill.initialStats.cooldown ?? 1)
+            : activeSkillId === 'electric-ball'
+              ? 0
+              : activeSkillId === 'beam' && this.beamSnapshot
+                ? this.beamSnapshot.cooldown
+                : (skill.initialStats.cooldown ?? 1)
 
     const remaining = (skillCooldowns.get(activeSkillId) ?? 0) - dt
 
@@ -1228,6 +1262,236 @@ export class GameEngine {
         alive: true,
       })
     }
+  }
+
+  /** 同步環繞電球：從快照建立/更新 orbitalOrbs */
+  private syncOrbitalOrbsFromSnapshot() {
+    const snapshot = this.electricBallSnapshot
+    if (!snapshot) {
+      this.state.orbitalOrbs = []
+      this.lastElectricBallEmpTime = 0
+      return
+    }
+    const templates = snapshot.orbs
+    const existing = this.state.orbitalOrbs
+    while (existing.length < templates.length) {
+      const t = templates[existing.length] ?? templates[templates.length - 1]!
+      const angleOffset = (2 * Math.PI / templates.length) * existing.length
+      existing.push({
+        id: this.genId(),
+        angle: angleOffset,
+        radius: t.radius,
+        touchDamage: t.touchDamage,
+        touchCount: 0,
+        paused: false,
+        pauseUntil: 0,
+        attachedTo: null,
+        attachStartTime: 0,
+        respawning: false,
+        respawnAt: 0,
+        hasLightningChain: t.hasLightningChain,
+        hasAttach: t.hasAttach,
+        hasEmp: t.hasEmp,
+        hasStormCore: t.hasStormCore,
+        hasChainBoost: t.hasChainBoost,
+        hasAttachBurst: t.hasAttachBurst,
+        hasTesla: t.hasTesla,
+        hasSuperconduct: t.hasSuperconduct,
+      })
+    }
+    if (existing.length > templates.length) {
+      this.state.orbitalOrbs = existing.slice(0, templates.length)
+    }
+    // 同步快照的卡片屬性到現有電球（數量相同時也要更新）
+    for (let i = 0; i < existing.length; i++) {
+      const t = templates[i] ?? templates[templates.length - 1]!
+      const orb = existing[i]!
+      orb.radius = t.radius
+      orb.touchDamage = t.touchDamage
+      orb.hasLightningChain = t.hasLightningChain
+      orb.hasAttach = t.hasAttach
+      orb.hasEmp = t.hasEmp
+      orb.hasStormCore = t.hasStormCore
+      orb.hasChainBoost = t.hasChainBoost
+      orb.hasAttachBurst = t.hasAttachBurst
+      orb.hasTesla = t.hasTesla
+      orb.hasSuperconduct = t.hasSuperconduct
+    }
+  }
+
+  /** 更新環繞電球：旋轉、觸碰傷害、麻痹 */
+  private updateOrbitalOrbs(dt: number) {
+    const snapshot = this.electricBallSnapshot
+    if (!snapshot) return
+    const { player, enemies, orbitalOrbs } = this.state
+    const now = performance.now()
+    const rotSpeed = (ELECTRIC_BALL_BASE.rotationSpeed * Math.PI) / 180
+    const orbSize = 10
+
+    // EMP：任一電球有 hasEmp 時，每 5 秒釋放一次
+    const empOrbs = orbitalOrbs.filter((o) => o.hasEmp && !o.respawning && !o.attachedTo)
+    if (empOrbs.length > 0 && now - this.lastElectricBallEmpTime >= ELECTRIC_BALL_CARD['electric-ball-emp'].empIntervalMs) {
+      this.lastElectricBallEmpTime = now
+      const empRadius = Math.max(...empOrbs.map((o) => o.radius)) * ELECTRIC_BALL_CARD['electric-ball-emp'].empRadiusMultiplier
+      for (const e of enemies) {
+        if (e.hp <= 0) continue
+        if (this.distance(player.position, e.position) < empRadius + e.size) {
+          e.frozenUntil = Math.max(e.frozenUntil, now + ELECTRIC_BALL_CARD['electric-ball-emp'].empParalyzeMs)
+        }
+      }
+      for (const o of empOrbs) {
+        o.paused = true
+        o.pauseUntil = now + ELECTRIC_BALL_CARD['electric-ball-emp'].orbPauseMs
+      }
+    }
+
+    // 超導磁場內敵人減速（已在 updateEnemyAI 用 isEnemyInSuperconductZone 處理）
+
+    // 閃電連線：有 hasLightningChain 的電球之間連線，對穿過的敵人造成傷害
+    const activeOrbs = orbitalOrbs.filter((o) => !o.respawning && !o.attachedTo && !o.paused)
+    const chainOrbs = activeOrbs.filter((o) => o.hasLightningChain)
+    if (chainOrbs.length >= 2) {
+      const chainCount = chainOrbs.length
+      const linkCount = chainCount * (chainCount - 1) / 2
+      const baseDps = chainOrbs.some((o) => o.hasChainBoost)
+        ? ELECTRIC_BALL_CARD['electric-ball-chain-boost'].baseChainDps + (linkCount - 1) * ELECTRIC_BALL_CARD['electric-ball-chain-boost'].chainBonusPerLink
+        : 15
+      const chainDmgPerLink = baseDps * (dt / 1000)
+      const lineWidth = 12
+      for (let i = 0; i < chainOrbs.length; i++) {
+        for (let j = i + 1; j < chainOrbs.length; j++) {
+          const o1 = chainOrbs[i]!
+          const o2 = chainOrbs[j]!
+          const ax = player.position.x + Math.cos(o1.angle) * o1.radius
+          const ay = player.position.y + Math.sin(o1.angle) * o1.radius
+          const bx = player.position.x + Math.cos(o2.angle) * o2.radius
+          const by = player.position.y + Math.sin(o2.angle) * o2.radius
+          for (const enemy of enemies) {
+            if (enemy.hp <= 0) continue
+            const d = this.distanceToSegment(enemy.position, { x: ax, y: ay }, { x: bx, y: by })
+            if (d < lineWidth + enemy.size) {
+              const dmg = Math.round(chainDmgPerLink)
+              if (dmg > 0) {
+                enemy.hp -= dmg
+                this.spawnDamageNumber(enemy.position, dmg, '#B388FF')
+                if (enemy.hp <= 0) this.handleEnemyDeath(enemy)
+              }
+            }
+          }
+        }
+      }
+    }
+
+    for (const orb of orbitalOrbs) {
+      if (orb.respawning) {
+        if (now >= orb.respawnAt) {
+          orb.respawning = false
+          orb.touchCount = 0
+        }
+        continue
+      }
+      if (orb.paused && now < orb.pauseUntil) continue
+
+      if (orb.attachedTo) {
+        const enemy = enemies.find((e) => e.id === orb.attachedTo)
+        if (!enemy || enemy.hp <= 0) {
+          orb.attachedTo = null
+          continue
+        }
+        const attachCfg = ELECTRIC_BALL_CARD['electric-ball-attach']
+        const elapsed = (now - orb.attachStartTime) / 1000
+        if (elapsed >= attachCfg.attachDurationMs / 1000) {
+          orb.attachedTo = null
+          if (orb.hasAttachBurst) {
+            const burstDmg = Math.round(orb.touchDamage * attachCfg.attachDamageMultiplier * (attachCfg.attachDurationMs / 1000) * ELECTRIC_BALL_CARD['electric-ball-attach-burst'].burstDamageRatio)
+            for (const e of enemies) {
+              if (e.hp <= 0) continue
+              const d = this.distance(enemy.position, e.position)
+              if (d < ELECTRIC_BALL_CARD['electric-ball-attach-burst'].burstRadius + e.size) {
+                e.hp -= burstDmg
+                this.spawnDamageNumber(e.position, burstDmg, '#7C4DFF')
+                if (e.hp <= 0) this.handleEnemyDeath(e)
+              }
+            }
+            this.state.electricExplosions.push({ id: this.genId(), position: { ...enemy.position }, radius: 60, createdAt: now, duration: 400 })
+          }
+          continue
+        }
+        const dmgPerSec = orb.touchDamage * attachCfg.attachDamageMultiplier
+        const dmg = dmgPerSec * dt
+        enemy.hp -= dmg
+        if (Math.random() < 0.1) this.spawnDamageNumber(enemy.position, Math.round(dmg), '#B388FF')
+        if (enemy.hp <= 0) this.handleEnemyDeath(enemy)
+        continue
+      }
+
+      orb.angle += rotSpeed * dt
+      const ox = player.position.x + Math.cos(orb.angle) * orb.radius
+      const oy = player.position.y + Math.sin(orb.angle) * orb.radius
+
+      for (const enemy of enemies) {
+        if (enemy.hp <= 0) continue
+        const dist = Math.sqrt((ox - enemy.position.x) ** 2 + (oy - enemy.position.y) ** 2)
+        if (dist < orbSize + enemy.size) {
+          enemy.hp -= orb.touchDamage
+          this.spawnDamageNumber(enemy.position, orb.touchDamage, '#B388FF')
+          if (enemy.hp <= 0) {
+            this.handleEnemyDeath(enemy)
+          } else if (Math.random() < ELECTRIC_BALL_BASE.paralyzeChance) {
+            enemy.frozenUntil = Math.max(enemy.frozenUntil, now + 500)
+          }
+          if (orb.hasTesla && Math.random() < ELECTRIC_BALL_CARD['electric-ball-tesla'].branchChance) {
+            const branchDmg = Math.round(orb.touchDamage * ELECTRIC_BALL_CARD['electric-ball-tesla'].branchDamageRatio)
+            const branchRange = ELECTRIC_BALL_CARD['electric-ball-tesla'].branchRange
+            let best: Entity | null = null
+            let bestDist = branchRange + 1
+            for (const e of enemies) {
+              if (e.hp <= 0 || e.id === enemy.id) continue
+              const d = this.distance(enemy.position, e.position)
+              if (d < bestDist) {
+                bestDist = d
+                best = e
+              }
+            }
+            if (best && bestDist <= branchRange) {
+              best.hp -= branchDmg
+              this.spawnDamageNumber(best.position, branchDmg, '#7C4DFF')
+              if (best.hp <= 0) this.handleEnemyDeath(best)
+            }
+          }
+          orb.touchCount++
+          if (orb.hasStormCore && orb.touchCount >= ELECTRIC_BALL_CARD['electric-ball-storm-core'].touchThreshold) {
+            const cfg = ELECTRIC_BALL_CARD['electric-ball-storm-core']
+            const expDmg = orb.touchDamage * cfg.explosionDamageMultiplier
+            for (const e of enemies) {
+              if (e.hp <= 0) continue
+              const d = this.distance({ x: ox, y: oy }, e.position)
+              if (d < cfg.explosionRadius + e.size) {
+                e.hp -= expDmg
+                this.spawnDamageNumber(e.position, expDmg, '#7C4DFF')
+                if (e.hp <= 0) this.handleEnemyDeath(e)
+              }
+            }
+            this.state.electricExplosions.push({ id: this.genId(), position: { x: ox, y: oy }, radius: cfg.explosionRadius, createdAt: now, duration: 400 })
+            orb.respawning = true
+            orb.respawnAt = now + cfg.respawnDelayMs
+          }
+          if (orb.hasAttach) {
+            orb.attachedTo = enemy.id
+            orb.attachStartTime = now
+          }
+          break
+        }
+      }
+    }
+  }
+
+  /** 清理過期電球爆炸效果 */
+  private updateElectricExplosions() {
+    const now = performance.now()
+    this.state.electricExplosions = this.state.electricExplosions.filter(
+      (e) => now - e.createdAt < e.duration,
+    )
   }
 
   /** 清理過期火焰爆炸效果 */
@@ -2203,6 +2467,19 @@ export class GameEngine {
     )
   }
 
+  /** 點到線段的最近距離 */
+  private distanceToSegment(p: Position, a: Position, b: Position): number {
+    const ax = a.x - p.x
+    const ay = a.y - p.y
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const ab2 = abx * abx + aby * aby || 1
+    const t = Math.max(0, Math.min(1, (ax * abx + ay * aby) / ab2))
+    const qx = ax + t * abx
+    const qy = ay + t * aby
+    return Math.sqrt(qx * qx + qy * qy)
+  }
+
   private distance(a: Position, b: Position): number {
     const dx = a.x - b.x
     const dy = a.y - b.y
@@ -2304,7 +2581,9 @@ export class GameEngine {
     this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireballProjectiles = []
+    this.state.orbitalOrbs = []
     this.state.fireExplosions = []
+    this.state.electricExplosions = []
     this.state.lavaZones = []
     this.state.burningCorpses = []
     this.state.beamEffects = []
@@ -2329,7 +2608,9 @@ export class GameEngine {
     this.state.frozenGroundShards = []
     this.state.resonanceWaves = []
     this.state.fireballProjectiles = []
+    this.state.orbitalOrbs = []
     this.state.fireExplosions = []
+    this.state.electricExplosions = []
     this.state.lavaZones = []
     this.state.burningCorpses = []
     this.state.beamEffects = []

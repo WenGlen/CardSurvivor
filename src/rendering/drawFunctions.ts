@@ -17,7 +17,7 @@ export interface HudConfig {
 
 /** 繪製遊戲畫面 */
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: HudConfig) {
-  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, frozenGroundShards, resonanceWaves, fireballProjectiles, fireExplosions, lavaZones, burningCorpses, beamEffects, beamTrails, mapPickups } = state
+  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, frozenGroundShards, resonanceWaves, fireballProjectiles, fireExplosions, orbitalOrbs, electricExplosions, lavaZones, burningCorpses, beamEffects, beamTrails, mapPickups } = state
 
   ctx.fillStyle = '#1a1a2e'
   ctx.fillRect(0, 0, canvasWidth, canvasHeight)
@@ -46,6 +46,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   // 火焰爆炸（在敵人之下）
   for (const exp of fireExplosions) drawFireExplosion(ctx, exp, now)
 
+  // 電球爆炸（在敵人之下）
+  for (const exp of electricExplosions ?? []) drawElectricExplosion(ctx, exp, now)
+
   // 燃燒屍體
   for (const corpse of burningCorpses) drawBurningCorpse(ctx, corpse, now)
 
@@ -63,6 +66,7 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   drawPlayerFacingIndicator(ctx, player, state.playerFacingAngle)
   for (const proj of projectiles) drawProjectile(ctx, proj)
   for (const fb of fireballProjectiles) drawFireballProjectile(ctx, fb)
+  for (const orb of orbitalOrbs ?? []) drawOrbitalOrb(ctx, orb, player, enemies)
 
   // 主角（含受傷震動 + 紅色疊層）
   drawPlayer(ctx, player, hud?.invincibleUntil)
@@ -727,6 +731,89 @@ export function drawFireballProjectile(
   ctx.arc(x, y - arcHeight, 10, 0, Math.PI * 2)
   ctx.fillStyle = 'rgba(255, 152, 0, 0.15)'
   ctx.fill()
+
+  ctx.restore()
+}
+
+/** 繪製環繞電球（主角身邊旋轉） */
+export function drawOrbitalOrb(
+  ctx: CanvasRenderingContext2D,
+  orb: GameState['orbitalOrbs'][0],
+  player: GameState['player'],
+  enemies: GameState['enemies'],
+) {
+  if (orb.respawning) return
+  let x: number
+  let y: number
+  if (orb.attachedTo) {
+    const enemy = enemies.find((e) => e.id === orb.attachedTo)
+    x = enemy ? enemy.position.x : player.position.x + Math.cos(orb.angle) * orb.radius
+    y = enemy ? enemy.position.y : player.position.y + Math.sin(orb.angle) * orb.radius
+  } else {
+    x = player.position.x + Math.cos(orb.angle) * orb.radius
+    y = player.position.y + Math.sin(orb.angle) * orb.radius
+  }
+
+  const orbSize = 8
+  ctx.save()
+  ctx.beginPath()
+  ctx.ellipse(x, y + 2, orbSize * 0.6, orbSize * 0.3, 0, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.25)'
+  ctx.fill()
+
+  const gradient = ctx.createRadialGradient(x, y, 0, x, y, orbSize)
+  gradient.addColorStop(0, '#E1BEE7')
+  gradient.addColorStop(0.5, '#B388FF')
+  gradient.addColorStop(1, '#7C4DFF')
+
+  ctx.beginPath()
+  ctx.arc(x, y, orbSize, 0, Math.PI * 2)
+  ctx.fillStyle = gradient
+  ctx.fill()
+
+  ctx.beginPath()
+  ctx.arc(x, y, orbSize + 3, 0, Math.PI * 2)
+  ctx.fillStyle = 'rgba(124, 77, 255, 0.15)'
+  ctx.fill()
+
+  ctx.restore()
+}
+
+/** 繪製電球爆炸效果 */
+export function drawElectricExplosion(
+  ctx: CanvasRenderingContext2D,
+  exp: GameState['electricExplosions'][0],
+  now: number,
+) {
+  const elapsed = now - exp.createdAt
+  const progress = elapsed / exp.duration
+  const alpha = Math.max(0, 1 - progress)
+  const expandProgress = Math.min(1, progress * 2)
+  const currentRadius = exp.radius * (0.3 + expandProgress * 0.7)
+  const flash = Math.sin(now / 50) * 0.2 + 0.8
+
+  ctx.save()
+  ctx.globalAlpha = alpha * flash
+
+  const gradient = ctx.createRadialGradient(
+    exp.position.x, exp.position.y, 0,
+    exp.position.x, exp.position.y, currentRadius,
+  )
+  gradient.addColorStop(0, 'rgba(225, 190, 231, 0.7)')
+  gradient.addColorStop(0.4, 'rgba(179, 136, 255, 0.5)')
+  gradient.addColorStop(0.8, 'rgba(124, 77, 255, 0.2)')
+  gradient.addColorStop(1, 'rgba(124, 77, 255, 0)')
+
+  ctx.beginPath()
+  ctx.arc(exp.position.x, exp.position.y, currentRadius, 0, Math.PI * 2)
+  ctx.fillStyle = gradient
+  ctx.fill()
+
+  ctx.beginPath()
+  ctx.arc(exp.position.x, exp.position.y, currentRadius * 0.9, 0, Math.PI * 2)
+  ctx.strokeStyle = `rgba(179, 136, 255, ${alpha * 0.6})`
+  ctx.lineWidth = 2
+  ctx.stroke()
 
   ctx.restore()
 }

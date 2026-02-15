@@ -1,5 +1,5 @@
 import type { SkillDefinition } from './types'
-import { ICE_ARROW_BASE, ICE_SPIKE_BASE, FIREBALL_BASE, BEAM_BASE } from '../config'
+import { ICE_ARROW_BASE, ICE_SPIKE_BASE, FIREBALL_BASE, BEAM_BASE, ELECTRIC_BALL_BASE } from '../config'
 
 /** 冰箭技能定義（數值來自 config/skills.config） */
 export const iceArrow: SkillDefinition = {
@@ -61,5 +61,20 @@ export const beam: SkillDefinition = {
   },
 }
 
+/** 電球技能定義（數值來自 config/skills.config，環繞物） */
+export const electricBall: SkillDefinition = {
+  id: 'electric-ball',
+  name: '電球',
+  element: 'LIGHTNING',
+  damageType: 'ORBIT',
+  description: '在主角身邊環繞旋轉的電球，碰觸造成傷害，高機率麻痺。',
+  initialStats: {
+    damage: ELECTRIC_BALL_BASE.damage,
+    radius: ELECTRIC_BALL_BASE.radius,
+    cooldown: 0,
+    count: ELECTRIC_BALL_BASE.count,
+  },
+}
+
 /** 所有可用技能列表 */
-export const allSkills: SkillDefinition[] = [iceArrow, iceSpike, fireball, beam]
+export const allSkills: SkillDefinition[] = [iceArrow, iceSpike, fireball, electricBall, beam]

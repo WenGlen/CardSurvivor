@@ -3,10 +3,12 @@ import {
   ICE_SPIKE_BASE,
   FIREBALL_BASE,
   BEAM_BASE,
+  ELECTRIC_BALL_BASE,
   ICE_ARROW_CARD,
   ICE_SPIKE_CARD,
   FIREBALL_CARD,
   BEAM_CARD,
+  ELECTRIC_BALL_CARD,
 } from '../config'
 
 /** 卡片稀有度 */
@@ -689,6 +691,202 @@ export function applyFireballGoldCardToFireball(card: CardDefinition, fb: Fireba
   switch (card.id) {
     case 'fireball-wildfire': fb.hasWildfire = true; break
     case 'fireball-chain-explosion': fb.hasChainExplosion = true; break
+  }
+}
+
+// ── 電球卡片定義（CardsDetail-v3：環繞物，主角身邊旋轉）──
+
+/** 單顆電球的實例快照（環繞物模板） */
+export interface ElectricBallInstance {
+  touchDamage: number
+  radius: number
+  hasLightningChain: boolean
+  hasAttach: boolean
+  hasEmp: boolean
+  hasStormCore: boolean
+  hasChainBoost: boolean
+  hasAttachBurst: boolean
+  hasTesla: boolean
+  hasSuperconduct: boolean
+}
+
+/** 電球技能的完整快照（經卡片堆疊計算後） */
+export interface ElectricBallSnapshot {
+  orbs: ElectricBallInstance[]
+  /** EMP 上次釋放時間（由引擎維護） */
+  lastEmpTime?: number
+}
+
+/** 取得用於強化碎片「數量」的初始電球 */
+export function getBaseElectricBallForExtra(): ElectricBallInstance {
+  return {
+    touchDamage: ELECTRIC_BALL_BASE.damage,
+    radius: ELECTRIC_BALL_BASE.radius,
+    hasLightningChain: false,
+    hasAttach: false,
+    hasEmp: false,
+    hasStormCore: false,
+    hasChainBoost: false,
+    hasAttachBurst: false,
+    hasTesla: false,
+    hasSuperconduct: false,
+  }
+}
+
+/** 電球初始單顆實例 */
+const BASE_ELECTRIC_BALL: ElectricBallInstance = {
+  touchDamage: ELECTRIC_BALL_BASE.damage,
+  radius: ELECTRIC_BALL_BASE.radius,
+  hasLightningChain: false,
+  hasAttach: false,
+  hasEmp: false,
+  hasStormCore: false,
+  hasChainBoost: false,
+  hasAttachBurst: false,
+  hasTesla: false,
+  hasSuperconduct: false,
+}
+
+export const electricBallCards: CardDefinition[] = [
+  // 銅卡
+  {
+    id: 'electric-ball-lightning-chain',
+    name: '閃電連線',
+    skillId: 'electric-ball',
+    rarity: 'bronze',
+    description: '現有電球之間產生閃電鏈，對穿過的敵人造成傷害（與觸碰分攤，總值持平）',
+    orderNote: '需 2 顆以上；後拿的電球不產生新連線',
+  },
+  {
+    id: 'electric-ball-attach',
+    name: '電球吸附',
+    skillId: 'electric-ball',
+    rarity: 'bronze',
+    description: `電球碰到敵人後脫離軌道附著在敵人身上 ${ELECTRIC_BALL_CARD['electric-ball-attach'].attachDurationMs / 1000} 秒（每秒 = 傷害 ×${ELECTRIC_BALL_CARD['electric-ball-attach'].attachDamageMultiplier}）`,
+    orderNote: '附著期間不參與連線',
+  },
+  {
+    id: 'electric-ball-emp',
+    name: '電磁脈衝',
+    skillId: 'electric-ball',
+    rarity: 'bronze',
+    description: `每 ${ELECTRIC_BALL_CARD['electric-ball-emp'].empIntervalMs / 1000} 秒釋放 EMP（半徑 = 旋轉半徑 ×${ELECTRIC_BALL_CARD['electric-ball-emp'].empRadiusMultiplier}），麻痺 ${ELECTRIC_BALL_CARD['electric-ball-emp'].empParalyzeMs / 1000} 秒；釋放時電球暫停 ${ELECTRIC_BALL_CARD['electric-ball-emp'].orbPauseMs / 1000} 秒`,
+    orderNote: '後拿的電球不參與 EMP',
+  },
+  // 銀卡
+  {
+    id: 'electric-ball-storm-core',
+    name: '雷暴核心',
+    skillId: 'electric-ball',
+    rarity: 'silver',
+    description: `電球累計碰觸 ${ELECTRIC_BALL_CARD['electric-ball-storm-core'].touchThreshold} 次後爆炸（範圍 ${ELECTRIC_BALL_CARD['electric-ball-storm-core'].explosionRadius}px，傷害 ×${ELECTRIC_BALL_CARD['electric-ball-storm-core'].explosionDamageMultiplier}），爆炸後消失 ${ELECTRIC_BALL_CARD['electric-ball-storm-core'].respawnDelayMs / 1000} 秒再生成`,
+    orderNote: '連線存在時觸碰也算入次數',
+  },
+  {
+    id: 'electric-ball-chain-boost',
+    name: '連線增幅',
+    skillId: 'electric-ball',
+    rarity: 'silver',
+    description: `閃電連線傷害提升至 ${ELECTRIC_BALL_CARD['electric-ball-chain-boost'].baseChainDps}/秒，每多一條連線每條 +${ELECTRIC_BALL_CARD['electric-ball-chain-boost'].chainBonusPerLink}`,
+    orderNote: '需先有閃電連線',
+  },
+  {
+    id: 'electric-ball-attach-burst',
+    name: '附著爆發',
+    skillId: 'electric-ball',
+    rarity: 'silver',
+    description: `吸附結束時在敵人位置產生小型雷暴（半徑 ${ELECTRIC_BALL_CARD['electric-ball-attach-burst'].burstRadius}px，傷害 = 附著總傷 ×${ELECTRIC_BALL_CARD['electric-ball-attach-burst'].burstDamageRatio}）`,
+    orderNote: '需先有吸附',
+  },
+  // 金卡
+  {
+    id: 'electric-ball-tesla',
+    name: '特斯拉線圈',
+    skillId: 'electric-ball',
+    rarity: 'gold',
+    description: `所有電球（含未來）碰觸時 ${Math.round(ELECTRIC_BALL_CARD['electric-ball-tesla'].branchChance * 100)}% 機率向 ${ELECTRIC_BALL_CARD['electric-ball-tesla'].branchRange}px 內另一敵人釋放分支閃電（${Math.round(ELECTRIC_BALL_CARD['electric-ball-tesla'].branchDamageRatio * 100)}% 傷害）`,
+    orderNote: '金卡：未來套用',
+  },
+  {
+    id: 'electric-ball-superconduct',
+    name: '超導磁場',
+    skillId: 'electric-ball',
+    rarity: 'gold',
+    description: `所有電球（含未來）軌道內形成磁場，進入的敵人移速 -${Math.round(ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate * 100)}%、攻速 -${Math.round(ELECTRIC_BALL_CARD['electric-ball-superconduct'].attackSlowRate * 100)}%`,
+    orderNote: '金卡：未來套用',
+  },
+]
+
+/**
+ * 根據卡片序列計算電球快照（CardsDetail-v3：環繞物）
+ * - 銅/銀卡：順序依賴，只影響「當下已存在」的電球
+ * - 金卡：全局效果，不受順序影響，最後統一套用
+ */
+export function computeElectricBallSnapshot(cardSequence: CardDefinition[]): ElectricBallSnapshot {
+  const orbs: ElectricBallInstance[] = []
+  for (let i = 0; i < ELECTRIC_BALL_BASE.count; i++) {
+    orbs.push({ ...BASE_ELECTRIC_BALL })
+  }
+
+  const sequentialCards = cardSequence.filter((c) => c.rarity !== 'gold')
+  const goldCards = cardSequence.filter((c) => c.rarity === 'gold')
+
+  for (const card of sequentialCards) {
+    switch (card.id) {
+      case 'electric-ball-lightning-chain':
+        for (const eb of orbs) eb.hasLightningChain = true
+        break
+      case 'electric-ball-attach':
+        for (const eb of orbs) eb.hasAttach = true
+        break
+      case 'electric-ball-emp':
+        for (const eb of orbs) eb.hasEmp = true
+        break
+      case 'electric-ball-storm-core':
+        for (const eb of orbs) eb.hasStormCore = true
+        break
+      case 'electric-ball-chain-boost':
+        for (const eb of orbs) eb.hasChainBoost = true
+        break
+      case 'electric-ball-attach-burst':
+        for (const eb of orbs) eb.hasAttachBurst = true
+        break
+    }
+  }
+
+  for (const card of goldCards) {
+    switch (card.id) {
+      case 'electric-ball-tesla':
+        for (const eb of orbs) eb.hasTesla = true
+        break
+      case 'electric-ball-superconduct':
+        for (const eb of orbs) eb.hasSuperconduct = true
+        break
+    }
+  }
+
+  return { orbs }
+}
+
+/** 對單一陣列內的電球套用一張銅/銀卡效果（in-place） */
+export function applyElectricBallSequentialCardToElectricBalls(card: CardDefinition, orbs: ElectricBallInstance[]): void {
+  for (const eb of orbs) {
+    switch (card.id) {
+      case 'electric-ball-lightning-chain': eb.hasLightningChain = true; break
+      case 'electric-ball-attach': eb.hasAttach = true; break
+      case 'electric-ball-emp': eb.hasEmp = true; break
+      case 'electric-ball-storm-core': eb.hasStormCore = true; break
+      case 'electric-ball-chain-boost': eb.hasChainBoost = true; break
+      case 'electric-ball-attach-burst': eb.hasAttachBurst = true; break
+    }
+  }
+}
+
+/** 對單一電球套用一張金卡效果（in-place） */
+export function applyElectricBallGoldCardToElectricBall(card: CardDefinition, eb: ElectricBallInstance): void {
+  switch (card.id) {
+    case 'electric-ball-tesla': eb.hasTesla = true; break
+    case 'electric-ball-superconduct': eb.hasSuperconduct = true; break
   }
 }
 

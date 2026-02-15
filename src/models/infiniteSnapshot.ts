@@ -8,6 +8,7 @@ import {
   MIN_COOLDOWN_MULTIPLIER,
   ICE_ARROW_BASE,
   FIREBALL_BASE,
+  ELECTRIC_BALL_BASE,
   BEAM_BASE,
   FIREBALL_CARD,
 } from '../config'
@@ -15,16 +16,19 @@ import type { CardDefinition } from './cards'
 import {
   getBaseArrowForExtra,
   getBaseFireballForExtra,
+  getBaseElectricBallForExtra,
   getBaseBeamForExtra,
   applyIceArrowSequentialCardToArrows,
   applyIceArrowGoldCardToArrow,
   applyFireballSequentialCardToFireballs,
   applyFireballGoldCardToFireball,
+  applyElectricBallSequentialCardToElectricBalls,
+  applyElectricBallGoldCardToElectricBall,
   applyBeamSequentialCardToBeams,
   applyBeamGoldCardToBeam,
   computeIceSpikeSnapshot,
 } from './cards'
-import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from './cards'
+import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, BeamSnapshot } from './cards'
 
 function cardsFromItems(items: SlotItem[]): CardDefinition[] {
   return items.filter((i): i is SlotItem & { kind: 'card' } => i.kind === 'card').map(i => i.card)
@@ -128,6 +132,43 @@ export function computeFireballSnapshotFromSequence(items: SlotItem[]): Fireball
     spreadAngle: FIREBALL_BASE.spreadAngle,
     fireballs,
   }
+}
+
+/** 電球：依序處理，count buff 時加入 template（環繞物無冷卻） */
+export function computeElectricBallSnapshotFromSequence(items: SlotItem[]): ElectricBallSnapshot {
+  const template = { ...getBaseElectricBallForExtra() }
+  const orbs: ElectricBallSnapshot['orbs'] = [...Array(ELECTRIC_BALL_BASE.count)].map(() => ({ ...getBaseElectricBallForExtra() }))
+  const goldCards: CardDefinition[] = []
+  let radiusMult = 1
+
+  for (const item of items) {
+    if (item.kind === 'card') {
+      const card = item.card
+      if (card.rarity === 'gold') {
+        goldCards.push(card)
+        applyElectricBallGoldCardToElectricBall(card, template)
+        for (const eb of orbs) applyElectricBallGoldCardToElectricBall(card, eb)
+      } else {
+        applyElectricBallSequentialCardToElectricBalls(card, [template])
+        applyElectricBallSequentialCardToElectricBalls(card, orbs)
+      }
+    } else if (item.kind === 'buff') {
+      if (item.buff.type === 'range') radiusMult *= BUFF_MULTIPLIERS.range
+      if (item.buff.type === 'count') {
+        const newEb = { ...template }
+        for (const g of goldCards) applyElectricBallGoldCardToElectricBall(g, newEb)
+        orbs.push(newEb)
+      }
+    }
+  }
+
+  if (radiusMult !== 1) {
+    for (const eb of orbs) {
+      eb.radius = Math.round(eb.radius * radiusMult)
+    }
+  }
+
+  return { orbs }
 }
 
 /** 光束：依序處理，count buff 時加入 template（v3：脈衝制、無純數值卡） */

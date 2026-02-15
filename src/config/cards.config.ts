@@ -153,3 +153,41 @@ export const BEAM_CARD = {
   },
 } as const
 
+/** 電球卡片數值（CardsDetail-v3：環繞物） */
+export const ELECTRIC_BALL_CARD = {
+  'electric-ball-lightning-chain': {},
+  'electric-ball-attach': {
+    attachDurationMs: 3000,
+    attachDamageMultiplier: 1.2,
+  },
+  'electric-ball-emp': {
+    empIntervalMs: 5000,
+    empParalyzeMs: 800,
+    orbPauseMs: 1000,
+    empRadiusMultiplier: 1.5,
+  },
+  'electric-ball-storm-core': {
+    touchThreshold: 8,
+    explosionRadius: 100,
+    explosionDamageMultiplier: 5,
+    respawnDelayMs: 3000,
+  },
+  'electric-ball-chain-boost': {
+    baseChainDps: 25,
+    chainBonusPerLink: 5,
+  },
+  'electric-ball-attach-burst': {
+    burstRadius: 60,
+    burstDamageRatio: 0.5,
+  },
+  'electric-ball-tesla': {
+    branchChance: 0.25,
+    branchRange: 150,
+    branchDamageRatio: 0.5,
+  },
+  'electric-ball-superconduct': {
+    slowRate: 0.4,
+    attackSlowRate: 0.2,
+  },
+} as const
+

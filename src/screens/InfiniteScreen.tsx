@@ -8,6 +8,7 @@ import {
   iceArrowCards,
   iceSpikeCards,
   fireballCards,
+  electricBallCards,
   beamCards,
   rarityHexColors,
   rarityNames,
@@ -16,6 +17,7 @@ import {
   computeIceArrowSnapshotFromSequence,
   computeIceSpikeSnapshotFromSequence,
   computeFireballSnapshotFromSequence,
+  computeElectricBallSnapshotFromSequence,
   computeBeamSnapshotFromSequence,
 } from '../models/infiniteSnapshot'
 import { getSlotStatusLines, getSkillIcon } from '../models/skillStatus'
@@ -65,6 +67,7 @@ const allCards: CardDefinition[] = [
   ...iceArrowCards,
   ...iceSpikeCards,
   ...fireballCards,
+  ...electricBallCards,
   ...beamCards,
 ]
 
@@ -84,6 +87,9 @@ function applyAllSnapshotsWithBuffs(engine: GameEngine, gs: InfiniteGameState) {
         break
       case 'fireball':
         engine.setFireballSnapshot(computeFireballSnapshotFromSequence(slot.items))
+        break
+      case 'electric-ball':
+        engine.setElectricBallSnapshot(computeElectricBallSnapshotFromSequence(slot.items))
         break
       case 'beam':
         engine.setBeamSnapshot(computeBeamSnapshotFromSequence(slot.items))
@@ -519,8 +525,9 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                 const skill = slot.skillId ? allSkills.find(s => s.id === slot.skillId) : null
                 const remaining = (slot.skillId && engine) ? (engine.state.skillCooldowns.get(slot.skillId) ?? 0) : 0
                 const total = (slot.skillId && skill && engine) ? engine.getCooldownForSkill(slot.skillId, skill) : 1
-                const ratio = Math.max(0, Math.min(1, remaining / total))
-                const isReady = remaining <= 0 && !!slot.skillId
+                const hasCooldown = slot.skillId === 'electric-ball' ? false : total > 0
+                const ratio = hasCooldown ? Math.max(0, Math.min(1, remaining / total)) : 0
+                const isReady = (slot.skillId === 'electric-ball' ? true : remaining <= 0) && !!slot.skillId
                 const pct = Math.round((1 - ratio) * 360)
                 return (
                   <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4, minHeight: 0 }}>
@@ -540,7 +547,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                           <span style={{ fontWeight: 'bold', color: '#ccc' }}>{slot.skillId ? (skill?.name ?? slot.skillId) : `卡槽 ${i + 1}`}</span>
                           {slot.skillId && (
                             <span style={{ marginLeft: 'auto', color: isReady ? '#4CAF50' : '#FFB74D', fontWeight: 'bold' }}>
-                              {isReady ? 'OK' : remaining.toFixed(1) + 's'}
+                              {slot.skillId === 'electric-ball' ? '常駐' : isReady ? 'OK' : remaining.toFixed(1) + 's'}
                             </span>
                           )}
                         </div>
@@ -745,8 +752,9 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                     const skill = slot.skillId ? allSkills.find(s => s.id === slot.skillId) : null
                     const remaining = (slot.skillId && engine) ? (engine.state.skillCooldowns.get(slot.skillId) ?? 0) : 0
                     const total = (slot.skillId && skill && engine) ? engine.getCooldownForSkill(slot.skillId, skill) : 1
-                    const isReady = remaining <= 0 && !!slot.skillId
-                    const pct = Math.round((1 - Math.max(0, Math.min(1, remaining / total))) * 360)
+                    const hasCooldown = slot.skillId === 'electric-ball' ? false : total > 0
+                    const isReady = (slot.skillId === 'electric-ball' ? true : remaining <= 0) && !!slot.skillId
+                    const pct = hasCooldown ? Math.round((1 - Math.max(0, Math.min(1, remaining / total))) * 360) : 0
                     const borderColor = !slot.skillId ? '#333' : isReady ? '#4CAF50' : '#555'
                     const borderImg = (slot.skillId && !isReady) ? `conic-gradient(#FFB74D ${pct}deg, #333 ${pct}deg)` : undefined
                     return (
@@ -766,7 +774,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                                 <span style={{ fontWeight: 'bold', color: '#ccc' }}>{slot.skillId ? (skill?.name ?? slot.skillId) : `卡槽 ${i + 1}`}</span>
                                 {slot.skillId && (
                                   <span style={{ color: isReady ? '#4CAF50' : '#FFB74D', fontWeight: 'bold' }}>
-                                    {isReady ? 'OK' : remaining.toFixed(1) + 's'}
+                                    {slot.skillId === 'electric-ball' ? '常駐' : isReady ? 'OK' : remaining.toFixed(1) + 's'}
                                   </span>
                                 )}
                               </div>

@@ -33,7 +33,7 @@ function ModeSelectScreen({ onSelect }: { onSelect: (screen: ScreenName) => void
       padding: 'clamp(8px, 2vw, 24px)', overflow: 'hidden',
     }}>
       <img
-        src="/CardSurvivor-mark.png"
+        src={`${import.meta.env.BASE_URL}CardSurvivor-mark.png`}
         alt="Card Survivor"
         style={{
           maxWidth: 'min(280px, 85vw)',

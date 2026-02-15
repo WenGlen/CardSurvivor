@@ -7,15 +7,17 @@ import {
   iceArrowCards,
   iceSpikeCards,
   fireballCards,
+  electricBallCards,
   beamCards,
   computeIceArrowSnapshot,
   computeIceSpikeSnapshot,
   computeFireballSnapshot,
+  computeElectricBallSnapshot,
   computeBeamSnapshot,
   rarityColors,
   rarityNames,
 } from '../models/cards'
-import type { CardDefinition, ArrowInstance, IceSpikeSnapshot, FireballSnapshot, BeamSnapshot } from '../models/cards'
+import type { CardDefinition, ArrowInstance, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, ElectricBallInstance, BeamSnapshot } from '../models/cards'
 import { drawGame } from '../rendering/drawFunctions'
 
 /** 練習場地圖：直式 4:3（與無限模式一致），主角可移動範圍限制在此 */
@@ -34,6 +36,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
     'ice-arrow': [],
     'ice-spike': [],
     'fireball': [],
+    'electric-ball': [],
     'beam': [],
   })
   const [enemyHp, setEnemyHp] = useState(9999)
@@ -58,6 +61,10 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   )
   const fireballSnap = useMemo(
     () => computeFireballSnapshot(cardSlots['fireball'] ?? []),
+    [cardSlots],
+  )
+  const electricBallSnap = useMemo(
+    () => computeElectricBallSnapshot(cardSlots['electric-ball'] ?? []),
     [cardSlots],
   )
   const beamSnap = useMemo(
@@ -94,6 +101,13 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
     if (!engine) return
     engine.setFireballSnapshot(fireballSnap)
   }, [fireballSnap])
+
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine) return
+    const hasElectricBallCards = (cardSlots['electric-ball']?.length ?? 0) > 0
+    engine.setElectricBallSnapshot(activeSkillId === 'electric-ball' && hasElectricBallCards ? electricBallSnap : null)
+  }, [electricBallSnap, activeSkillId, cardSlots])
 
   useEffect(() => {
     const engine = engineRef.current
@@ -310,6 +324,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               { id: 'ice-arrow', name: '冰箭' },
               { id: 'ice-spike', name: '凍土' },
               { id: 'fireball', name: '火球' },
+              { id: 'electric-ball', name: '電球' },
               { id: 'beam', name: '光束' },
             ].map((skill) => (
               <button
@@ -334,6 +349,8 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <IceSpikePreview snapshot={iceSpikeSnap} />
             ) : activeSkillId === 'fireball' ? (
               <FireballPreview snapshot={fireballSnap} />
+            ) : activeSkillId === 'electric-ball' ? (
+              <ElectricBallPreview snapshot={electricBallSnap} />
             ) : (
               <BeamPreview snapshot={beamSnap} />
             )}
@@ -373,7 +390,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <section>
                 <span style={{ fontSize: 10, fontWeight: 'bold', color: '#4FC3F7' }}>可用卡片</span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : beamCards).map((card) => (
+                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : activeSkillId === 'electric-ball' ? electricBallCards : beamCards).map((card) => (
                     <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
                   ))}
                 </div>
@@ -528,6 +545,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
                 { id: 'ice-arrow', name: '冰箭' },
                 { id: 'ice-spike', name: '凍土' },
                 { id: 'fireball', name: '火球' },
+                { id: 'electric-ball', name: '電球' },
                 { id: 'beam', name: '光束' },
               ] as const).map((skill) => (
                 <button
@@ -558,6 +576,8 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
                 <IceSpikePreview snapshot={iceSpikeSnap} />
               ) : activeSkillId === 'fireball' ? (
                 <FireballPreview snapshot={fireballSnap} />
+              ) : activeSkillId === 'electric-ball' ? (
+                <ElectricBallPreview snapshot={electricBallSnap} />
               ) : (
                 <BeamPreview snapshot={beamSnap} />
               )}
@@ -595,7 +615,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <section>
                 <h3 style={{ fontSize: 12, fontWeight: 'bold', color: '#4FC3F7', marginBottom: 6 }}>可用卡片</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : beamCards).map((card) => (
+                  {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : activeSkillId === 'electric-ball' ? electricBallCards : beamCards).map((card) => (
                     <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
                   ))}
                 </div>
@@ -854,6 +874,69 @@ function FireballPreview({ snapshot }: { snapshot: FireballSnapshot }) {
                 </td>
                 <td className="px-1.5 py-1 text-center">
                   {fb.isMeteor ? <span className="text-purple-300">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+/** 電球快照預覽 */
+function ElectricBallPreview({ snapshot }: { snapshot: ElectricBallSnapshot }) {
+  const flags: { label: string; active: boolean; color: string }[] = [
+    { label: '特斯拉', active: snapshot.orbs.some((e: ElectricBallInstance) => e.hasTesla), color: 'text-purple-300' },
+    { label: '磁場', active: snapshot.orbs.some((e: ElectricBallInstance) => e.hasSuperconduct), color: 'text-amber-300' },
+  ]
+  const activeFlags = flags.filter((f) => f.active)
+
+  return (
+    <div className="text-xs">
+      <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
+        <span>數量 <span className="text-white">{snapshot.orbs.length}</span></span>
+        <span>半徑 <span className="text-white">{snapshot.orbs[0]?.radius ?? 80}px</span></span>
+      </div>
+      {activeFlags.length > 0 && (
+        <div className="flex gap-1.5 flex-wrap mb-1">
+          {activeFlags.map((f) => (
+            <span key={f.label} className={`px-1.5 py-0.5 rounded bg-gray-700/50 ${f.color}`}>
+              {f.label}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="border border-gray-700 rounded overflow-hidden">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-gray-700/50 text-gray-400">
+              <th className="px-1.5 py-1 text-left">#</th>
+              <th className="px-1.5 py-1 text-right">傷害</th>
+              <th className="px-1.5 py-1 text-right">半徑</th>
+              <th className="px-1.5 py-1 text-center">連線</th>
+              <th className="px-1.5 py-1 text-center">吸附</th>
+              <th className="px-1.5 py-1 text-center">EMP</th>
+              <th className="px-1.5 py-1 text-center">雷暴</th>
+            </tr>
+          </thead>
+          <tbody>
+            {snapshot.orbs.map((eb: ElectricBallInstance, i: number) => (
+              <tr key={i} className="border-t border-gray-700/50">
+                <td className="px-1.5 py-1 text-gray-500">{i + 1}</td>
+                <td className="px-1.5 py-1 text-right text-white">{eb.touchDamage}</td>
+                <td className="px-1.5 py-1 text-right text-white">{eb.radius}px</td>
+                <td className="px-1.5 py-1 text-center">
+                  {eb.hasLightningChain ? <span className="text-amber-300">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
+                  {eb.hasAttach ? <span className="text-purple-400">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
+                  {eb.hasEmp ? <span className="text-yellow-300">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
+                  {eb.hasStormCore ? <span className="text-blue-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
               </tr>
             ))}

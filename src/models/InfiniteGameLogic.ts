@@ -323,8 +323,8 @@ export function getValidTargetSlotsForPickup(
   type: 'cooldown' | 'range' | 'count',
 ): number[] {
   const indices: number[] = []
-  const RANGE_SKILLS = ['ice-spike', 'fireball', 'beam']
-  const COUNT_SKILLS = ['ice-arrow', 'fireball', 'beam']
+  const RANGE_SKILLS = ['ice-spike', 'fireball', 'electric-ball', 'beam']
+  const COUNT_SKILLS = ['ice-arrow', 'fireball', 'electric-ball', 'beam']
   gs.slots.forEach((s, i) => {
     if (!s.skillId) return
     if (type === 'cooldown') indices.push(i)
