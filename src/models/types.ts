@@ -4,15 +4,24 @@ export interface Position {
   y: number
 }
 
-/** 地圖掉落物（無限模式：冷卻/範圍/數量強化碎片） */
+/** 地圖掉落物（無限模式：冷卻/範圍/數量/傷害強化碎片） */
 export interface MapPickup {
   id: string
   position: Position
-  type: 'cooldown' | 'range' | 'count'
+  type: 'cooldown' | 'range' | 'count' | 'damage'
   /** 生成時指定套用的卡槽索引（0/1/2） */
   targetSlotIndex: number
   createdAt: number
   /** 存在時長（ms），倒數完消失 */
+  duration: number
+}
+
+/** 專精大師：地上星星，拾取後觸發三選一 */
+export interface StarPickup {
+  id: string
+  position: Position
+  createdAt: number
+  /** 存在時長（ms），未拾取則消失 */
   duration: number
 }
 
@@ -103,13 +112,22 @@ export interface Projectile {
   hasTracking: boolean
   trackingTurnSpeed: number
   hasColdZone: boolean
-  hasConvergence: boolean
-  hasChainExplosion: boolean
-  /** 碎冰彈幕：命中時射出 2 顆微型碎冰 */
-  hasShardBarrage: boolean
-  /** 失溫增幅：觸發失溫的額外機率（0~1），冰箭專用 */
+  /** 金卡冷到頭痛：0.5s 內 2 次命中同一敵人 → 凍結 */
+  hasFreeze: boolean
+  /** 銀卡不能只我冷：擊殺後爆裂 4 支碎冰箭 25% */
+  hasDetonate: boolean
+  /** 銀卡還有小碎冰：擊中或穿透後多分裂 1 支 50% 碎冰箭；可堆疊，cascadeCount 為支數 */
+  hasCascade: boolean
+  /** 小碎冰支數（多張卡累加），未設則視為 1 */
+  cascadeCount?: number
+  /** 銀卡誰亂丟冰塊：擊中後改往最近敵人反彈 */
+  hasRicochet: boolean
+  /** 冰箭專用：每次擊中的行為順序（好冰分享=穿、誰亂丟冰塊=連鎖），反彈後可再命中同一敵人 */
+  pierceRicochetSequence?: ('pierce' | 'ricochet')[]
+  /** 冰箭專用：已觸發的擊中次數（用於依序取 pierceRicochetSequence） */
+  hitCount?: number
+  /** 失溫機率加成（0~1），冰箭專用 */
   chillChanceBonus: number
-  chainDepth: number
   hitEnemies: Set<string>
   alive: boolean
 }

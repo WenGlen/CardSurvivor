@@ -8,37 +8,39 @@
  * 或直接 import CARD_VALUES from './cards.config'
  */
 
-/** 冰箭卡片數值 */
+/** 冰箭卡片數值（CardsDetail-ice-v4） */
 export const ICE_ARROW_CARD = {
-  'ice-arrow-tracking': {
-    trackingTurnSpeed: 30,
+  'ice-arrow-homing': {
+    trackingTurnSpeed: 20,
     speedMultiplier: 0.85,
   },
-  'ice-arrow-chill-boost': {
-    chillChanceBonus: 0.3,
+  'ice-arrow-frostbite': { chillChanceBonus: 0.2 },
+  'ice-arrow-volley': { damageMultiplier: 0.5 },
+  'ice-arrow-fracture': {
+    initialDamageRatio: 0.5,
+    splitCount: 2,
+    splitDamageRatio: 0.5,
   },
-  'ice-arrow-split': { splitDamageRatio: 0.5 },
-  'ice-arrow-burst': { splitDamageRatio: 0.6 },
-  'ice-arrow-shard-barrage': {
-    shardDamageRatio: 0.15,
-    shardCount: 2,
+  'ice-arrow-pierce': { pierceBonus: 1 },
+  'ice-arrow-cascade': {
+    shardCount: 1,
+    splitDamageRatio: 0.5,
   },
-  'ice-arrow-convergence': {
-    convergeWindowMs: 500,
-    freezeDurationMs: 2000,
-    burstDamageRatio: 0.5,
-    requiredHitCount: 3,
+  'ice-arrow-ricochet': { pierceBonus: 1 },
+  'ice-arrow-detonate': {
+    shardCount: 4,
+    splitDamageRatio: 0.25,
   },
-  'ice-arrow-cold-zone': {
+  'ice-arrow-glacier': {
     coldZoneRadius: 40,
     coldZoneDurationMs: 1500,
-    slowRate: 0.3,
-    iceDmgBonus: 0.2,
+    slowRate: 0.5,
   },
-  'ice-arrow-chain': {
-    chainDamageRatio: 0.4,
-    chainCount: 3,
-    chainDecay: 0.4,
+  'ice-arrow-freeze': {
+    convergeWindowMs: 500,
+    requiredHitCount: 2,
+    freezeDurationMs: 1500,
+    frozenDmgBonus: 0.25,
   },
 } as const
 

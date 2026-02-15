@@ -17,7 +17,7 @@ export interface HudConfig {
 
 /** 繪製遊戲畫面 */
 export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: HudConfig) {
-  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, frozenGroundShards, resonanceWaves, fireballProjectiles, fireExplosions, orbitalOrbs, electricExplosions, lavaZones, burningCorpses, beamEffects, beamTrails, mapPickups } = state
+  const { canvasWidth, canvasHeight, player, enemies, projectiles, damageNumbers, coldZones, iceSpikeEffects, iceSpikeMines, frozenGroundShards, resonanceWaves, fireballProjectiles, fireExplosions, orbitalOrbs, electricExplosions, lavaZones, burningCorpses, beamEffects, beamTrails, mapPickups, mapStars } = state
 
   ctx.fillStyle = '#1a1a2e'
   ctx.fillRect(0, 0, canvasWidth, canvasHeight)
@@ -63,6 +63,9 @@ export function drawGame(ctx: CanvasRenderingContext2D, state: GameState, hud?: 
   // 地圖掉落物（強化碎片）
   for (const p of mapPickups ?? []) drawMapPickup(ctx, p, now)
 
+  // 專精大師：星星
+  for (const s of mapStars ?? []) drawStar(ctx, s, now)
+
   drawPlayerFacingIndicator(ctx, player, state.playerFacingAngle)
   for (const proj of projectiles) drawProjectile(ctx, proj)
   for (const fb of fireballProjectiles) drawFireballProjectile(ctx, fb)
@@ -89,13 +92,19 @@ function drawMapPickup(
   const duration = pickup.duration ?? 12000
   const remaining = Math.max(0, 1 - elapsed / duration)
   const pulse = 0.7 + 0.3 * Math.sin(elapsed / 400)
-  const colors = {
+  const colors: Record<GameState['mapPickups'][0]['type'], string> = {
     cooldown: '#4FC3F7',
     range: '#81C784',
     count: '#FFB74D',
+    damage: '#E57373',
   }
   const color = colors[pickup.type]
-  const labels = { cooldown: '冷卻', range: '範圍', count: '數量' }
+  const labels: Record<GameState['mapPickups'][0]['type'], string> = {
+    cooldown: '冷卻',
+    range: '範圍',
+    count: '數量',
+    damage: '傷害',
+  }
   const r = 16
   const strokeW = 4
 
@@ -128,6 +137,49 @@ function drawMapPickup(
   ctx.textAlign = 'center'
   ctx.textBaseline = 'middle'
   ctx.fillText(labels[pickup.type], x, y)
+  ctx.restore()
+}
+
+/** 繪製專精大師星星：外框時鐘倒數（與無限模式碎片同款），轉完消失 */
+function drawStar(ctx: CanvasRenderingContext2D, star: GameState['mapStars'][0], now: number) {
+  const { x, y } = star.position
+  const elapsed = now - star.createdAt
+  const duration = star.duration ?? 12000
+  const remaining = Math.max(0, 1 - elapsed / duration)
+  const pulse = 0.7 + 0.3 * Math.sin(elapsed / 400)
+  const color = '#FFD700'
+  const r = 18
+  const strokeW = 4
+
+  ctx.save()
+  ctx.globalAlpha = pulse
+
+  // 底色圓
+  ctx.beginPath()
+  ctx.arc(x, y, r, 0, Math.PI * 2)
+  ctx.fillStyle = color + '33'
+  ctx.fill()
+
+  // 外框倒數（12 點方向順時針，剩餘時間 = 弧長，與碎片一致）
+  ctx.beginPath()
+  ctx.arc(x, y, r + strokeW / 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2, false)
+  ctx.strokeStyle = color + '55'
+  ctx.lineWidth = strokeW
+  ctx.lineCap = 'round'
+  ctx.stroke()
+
+  ctx.beginPath()
+  ctx.arc(x, y, r + strokeW / 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * remaining, false)
+  ctx.strokeStyle = color
+  ctx.lineWidth = strokeW
+  ctx.lineCap = 'round'
+  ctx.stroke()
+
+  ctx.fillStyle = color
+  ctx.font = 'bold 14px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillText('★', x, y)
   ctx.restore()
 }
 

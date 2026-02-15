@@ -9,15 +9,21 @@ import {
   fireballCards,
   electricBallCards,
   beamCards,
-  computeIceArrowSnapshot,
-  computeIceSpikeSnapshot,
-  computeFireballSnapshot,
-  computeElectricBallSnapshot,
-  computeBeamSnapshot,
   rarityColors,
   rarityNames,
 } from '../models/cards'
-import type { CardDefinition, ArrowInstance, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, ElectricBallInstance, BeamSnapshot } from '../models/cards'
+import type { CardDefinition, IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, ElectricBallInstance, BeamSnapshot } from '../models/cards'
+import {
+  computeIceArrowSnapshotFromSequence,
+  computeIceSpikeSnapshotFromSequence,
+  computeFireballSnapshotFromSequence,
+  computeElectricBallSnapshotFromSequence,
+  computeBeamSnapshotFromSequence,
+} from '../models/infiniteSnapshot'
+import type { SlotItem, BuffCard } from '../models/InfiniteGameLogic'
+import { canAddCardToItems } from '../models/InfiniteGameLogic'
+import { getBuffLabels } from '../config'
+import { formatIceArrowStatus, getIceArrowGroups, formatIceSpikeStatus, formatFireballStatus, formatElectricBallStatus, formatBeamStatus } from '../models/skillStatus'
 import { drawGame } from '../rendering/drawFunctions'
 
 /** 練習場地圖：直式 4:3（與無限模式一致），主角可移動範圍限制在此 */
@@ -32,7 +38,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const engineRef = useRef<GameEngine | null>(null)
   const [activeSkillId, setActiveSkillId] = useState<string>('ice-arrow')
-  const [cardSlots, setCardSlots] = useState<Record<string, CardDefinition[]>>({
+  const [slotItems, setSlotItems] = useState<Record<string, SlotItem[]>>({
     'ice-arrow': [],
     'ice-spike': [],
     'fireball': [],
@@ -48,28 +54,28 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
     forceRender((n) => n + 1)
   }, [])
 
-  const cardSlot = cardSlots[activeSkillId] ?? []
+  const slot = slotItems[activeSkillId] ?? []
 
-  // 計算快照
+  // 計算快照（含強化碎片順序）
   const iceArrowSnap = useMemo(
-    () => computeIceArrowSnapshot(cardSlots['ice-arrow'] ?? []),
-    [cardSlots],
+    () => computeIceArrowSnapshotFromSequence(slotItems['ice-arrow'] ?? []),
+    [slotItems],
   )
   const iceSpikeSnap = useMemo(
-    () => computeIceSpikeSnapshot(cardSlots['ice-spike'] ?? []),
-    [cardSlots],
+    () => computeIceSpikeSnapshotFromSequence(slotItems['ice-spike'] ?? []),
+    [slotItems],
   )
   const fireballSnap = useMemo(
-    () => computeFireballSnapshot(cardSlots['fireball'] ?? []),
-    [cardSlots],
+    () => computeFireballSnapshotFromSequence(slotItems['fireball'] ?? []),
+    [slotItems],
   )
   const electricBallSnap = useMemo(
-    () => computeElectricBallSnapshot(cardSlots['electric-ball'] ?? []),
-    [cardSlots],
+    () => computeElectricBallSnapshotFromSequence(slotItems['electric-ball'] ?? []),
+    [slotItems],
   )
   const beamSnap = useMemo(
-    () => computeBeamSnapshot(cardSlots['beam'] ?? []),
-    [cardSlots],
+    () => computeBeamSnapshotFromSequence(slotItems['beam'] ?? []),
+    [slotItems],
   )
 
   // 初始化引擎
@@ -105,9 +111,9 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   useEffect(() => {
     const engine = engineRef.current
     if (!engine) return
-    const hasElectricBallCards = (cardSlots['electric-ball']?.length ?? 0) > 0
+    const hasElectricBallCards = (slotItems['electric-ball'] ?? []).some((i) => i.kind === 'card')
     engine.setElectricBallSnapshot(activeSkillId === 'electric-ball' && hasElectricBallCards ? electricBallSnap : null)
-  }, [electricBallSnap, activeSkillId, cardSlots])
+  }, [electricBallSnap, activeSkillId, slotItems])
 
   useEffect(() => {
     const engine = engineRef.current
@@ -144,31 +150,41 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
   })
 
   const handleAddCard = (card: CardDefinition) => {
-    setCardSlots((prev) => ({
+    const current = slotItems[activeSkillId] ?? []
+    if (!canAddCardToItems(current, card)) return
+    setSlotItems((prev) => ({
       ...prev,
-      [activeSkillId]: [...(prev[activeSkillId] ?? []), card],
+      [activeSkillId]: [...(prev[activeSkillId] ?? []), { kind: 'card', card }],
     }))
   }
 
-  const handleRemoveCard = (index: number) => {
-    setCardSlots((prev) => ({
+  const handleAddBuff = (type: BuffCard['type']) => {
+    const labels = getBuffLabels()
+    setSlotItems((prev) => ({
+      ...prev,
+      [activeSkillId]: [...(prev[activeSkillId] ?? []), { kind: 'buff', buff: { type, label: labels[type], skillId: activeSkillId } }],
+    }))
+  }
+
+  const handleRemoveItem = (index: number) => {
+    setSlotItems((prev) => ({
       ...prev,
       [activeSkillId]: (prev[activeSkillId] ?? []).filter((_, i) => i !== index),
     }))
   }
 
-  const handleMoveCard = (index: number, direction: -1 | 1) => {
-    setCardSlots((prev) => {
-      const slot = [...(prev[activeSkillId] ?? [])]
+  const handleMoveItem = (index: number, direction: -1 | 1) => {
+    setSlotItems((prev) => {
+      const list = [...(prev[activeSkillId] ?? [])]
       const target = index + direction
-      if (target < 0 || target >= slot.length) return prev
-      ;[slot[index], slot[target]] = [slot[target], slot[index]]
-      return { ...prev, [activeSkillId]: slot }
+      if (target < 0 || target >= list.length) return prev
+      ;[list[index], list[target]] = [list[target], list[index]]
+      return { ...prev, [activeSkillId]: list }
     })
   }
 
   const handleClearSlot = () => {
-    setCardSlots((prev) => ({ ...prev, [activeSkillId]: [] }))
+    setSlotItems((prev) => ({ ...prev, [activeSkillId]: [] }))
   }
 
   const handleSwitchSkill = (skillId: string) => {
@@ -344,7 +360,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
           <div style={{ padding: '8px 12px', background: '#15152a', maxHeight: 140, overflow: 'auto' }}>
             <div style={{ fontSize: 10, color: '#666', textAlign: 'center', marginBottom: 6 }}>卡片順序不同 → 效果不同</div>
             {activeSkillId === 'ice-arrow' ? (
-              <SnapshotPreview arrows={iceArrowSnap.arrows} cooldown={iceArrowSnap.cooldown} />
+              <SnapshotPreview snapshot={iceArrowSnap} />
             ) : activeSkillId === 'ice-spike' ? (
               <IceSpikePreview snapshot={iceSpikeSnap} />
             ) : activeSkillId === 'fireball' ? (
@@ -365,33 +381,51 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <section style={{ marginBottom: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
                   <span style={{ fontSize: 10, fontWeight: 'bold', color: '#4FC3F7' }}>卡片插槽</span>
-                  {cardSlot.length > 0 && (
+                  {slot.length > 0 && (
                     <button onClick={handleClearSlot} style={{ ...btnStyle, padding: '2px 6px', fontSize: 9, background: 'transparent', color: '#888' }}>清空</button>
                   )}
                 </div>
-                {cardSlot.length === 0 ? (
-                  <div style={{ fontSize: 9, color: '#555', textAlign: 'center', padding: 8, border: '1px dashed #333', borderRadius: 4 }}>從下方選擇卡片加入</div>
+                {slot.length === 0 ? (
+                  <div style={{ fontSize: 9, color: '#555', textAlign: 'center', padding: 8, border: '1px dashed #333', borderRadius: 4 }}>從下方選擇卡片或強化加入</div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    {cardSlot.map((card, i) => (
-                      <SlotCardItem
-                        key={`${card.id}-${i}`}
-                        card={card}
-                        index={i}
-                        total={cardSlot.length}
-                        onRemove={() => handleRemoveCard(i)}
-                        onMoveUp={() => handleMoveCard(i, -1)}
-                        onMoveDown={() => handleMoveCard(i, 1)}
-                      />
-                    ))}
+                    {slot.map((item, i) =>
+                      item.kind === 'card' ? (
+                        <SlotCardItem
+                          key={`card-${i}-${item.card.id}`}
+                          card={item.card}
+                          index={i}
+                          total={slot.length}
+                          onRemove={() => handleRemoveItem(i)}
+                          onMoveUp={() => handleMoveItem(i, -1)}
+                          onMoveDown={() => handleMoveItem(i, 1)}
+                        />
+                      ) : (
+                        <SlotBuffItem
+                          key={`buff-${i}-${item.buff.type}`}
+                          buff={item.buff}
+                          index={i}
+                          total={slot.length}
+                          onRemove={() => handleRemoveItem(i)}
+                          onMoveUp={() => handleMoveItem(i, -1)}
+                          onMoveDown={() => handleMoveItem(i, 1)}
+                        />
+                      ),
+                    )}
                   </div>
                 )}
               </section>
               <section>
                 <span style={{ fontSize: 10, fontWeight: 'bold', color: '#4FC3F7' }}>可用卡片</span>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                  <PracticeBuffSection skillId={activeSkillId} onAddBuff={handleAddBuff} />
                   {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : activeSkillId === 'electric-ball' ? electricBallCards : beamCards).map((card) => (
-                    <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
+                    <AvailableCard
+                      key={card.id}
+                      card={card}
+                      onAdd={() => handleAddCard(card)}
+                      disabled={!canAddCardToItems(slot, card)}
+                    />
                   ))}
                 </div>
               </section>
@@ -571,7 +605,7 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
             {/* 快照預覽 + 卡片插槽 + 可用卡片（可捲動） */}
             <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 10, display: 'flex', flexDirection: 'column', gap: 12 }}>
               {activeSkillId === 'ice-arrow' ? (
-                <SnapshotPreview arrows={iceArrowSnap.arrows} cooldown={iceArrowSnap.cooldown} />
+                <SnapshotPreview snapshot={iceArrowSnap} />
               ) : activeSkillId === 'ice-spike' ? (
                 <IceSpikePreview snapshot={iceSpikeSnap} />
               ) : activeSkillId === 'fireball' ? (
@@ -585,29 +619,41 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <section>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                   <h3 style={{ fontSize: 12, fontWeight: 'bold', color: '#4FC3F7', margin: 0 }}>卡片插槽</h3>
-                  {cardSlot.length > 0 && (
+                  {slot.length > 0 && (
                     <button onClick={handleClearSlot} style={{ ...btnStyle, padding: '2px 8px', fontSize: 10, background: 'transparent', color: '#888' }}>
                       清空
                     </button>
                   )}
                 </div>
-                {cardSlot.length === 0 ? (
+                {slot.length === 0 ? (
                   <div style={{ fontSize: 11, color: '#555', textAlign: 'center', padding: 12, border: '1px dashed #333', borderRadius: 6 }}>
-                    從下方選擇卡片加入
+                    從下方選擇卡片或強化加入
                   </div>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {cardSlot.map((card, i) => (
-                      <SlotCardItem
-                        key={`${card.id}-${i}`}
-                        card={card}
-                        index={i}
-                        total={cardSlot.length}
-                        onRemove={() => handleRemoveCard(i)}
-                        onMoveUp={() => handleMoveCard(i, -1)}
-                        onMoveDown={() => handleMoveCard(i, 1)}
-                      />
-                    ))}
+                    {slot.map((item, i) =>
+                      item.kind === 'card' ? (
+                        <SlotCardItem
+                          key={`card-${i}-${item.card.id}`}
+                          card={item.card}
+                          index={i}
+                          total={slot.length}
+                          onRemove={() => handleRemoveItem(i)}
+                          onMoveUp={() => handleMoveItem(i, -1)}
+                          onMoveDown={() => handleMoveItem(i, 1)}
+                        />
+                      ) : (
+                        <SlotBuffItem
+                          key={`buff-${i}-${item.buff.type}`}
+                          buff={item.buff}
+                          index={i}
+                          total={slot.length}
+                          onRemove={() => handleRemoveItem(i)}
+                          onMoveUp={() => handleMoveItem(i, -1)}
+                          onMoveDown={() => handleMoveItem(i, 1)}
+                        />
+                      ),
+                    )}
                   </div>
                 )}
               </section>
@@ -615,8 +661,14 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
               <section>
                 <h3 style={{ fontSize: 12, fontWeight: 'bold', color: '#4FC3F7', marginBottom: 6 }}>可用卡片</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <PracticeBuffSection skillId={activeSkillId} onAddBuff={handleAddBuff} />
                   {(activeSkillId === 'ice-arrow' ? iceArrowCards : activeSkillId === 'ice-spike' ? iceSpikeCards : activeSkillId === 'fireball' ? fireballCards : activeSkillId === 'electric-ball' ? electricBallCards : beamCards).map((card) => (
-                    <AvailableCard key={card.id} card={card} onAdd={() => handleAddCard(card)} />
+                    <AvailableCard
+                      key={card.id}
+                      card={card}
+                      onAdd={() => handleAddCard(card)}
+                      disabled={!canAddCardToItems(slot, card)}
+                    />
                   ))}
                 </div>
               </section>
@@ -659,6 +711,110 @@ export default function PracticeScreen({ onExit }: { onExit?: () => void }) {
 }
 
 // ── 子元件 ──
+
+const BUFF_COLORS: Record<BuffCard['type'], string> = {
+  cooldown: '#4FC3F7',
+  range: '#81C784',
+  count: '#FFB74D',
+  damage: '#E57373',
+}
+
+/** 該技能可用的強化類型 */
+function getBuffTypesForSkill(skillId: string): BuffCard['type'][] {
+  switch (skillId) {
+    case 'ice-arrow':
+      return ['cooldown', 'count', 'damage']
+    case 'ice-spike':
+      return ['cooldown', 'range']
+    default:
+      return ['cooldown', 'range', 'count']
+  }
+}
+
+/** 插槽中的強化項目（含上下移動 & 移除） */
+function SlotBuffItem({
+  buff,
+  index,
+  total,
+  onRemove,
+  onMoveUp,
+  onMoveDown,
+}: {
+  buff: BuffCard
+  index: number
+  total: number
+  onRemove: () => void
+  onMoveUp: () => void
+  onMoveDown: () => void
+}) {
+  const color = BUFF_COLORS[buff.type]
+  return (
+    <div
+      className="flex items-center gap-1.5 px-2 py-1.5 rounded border"
+      style={{ borderColor: color + '99', background: color + '18' }}
+    >
+      <span className="text-xs text-gray-500 w-4 shrink-0">{index + 1}.</span>
+      <span className="text-xs font-medium flex-1 truncate" style={{ color }}>{buff.label}</span>
+      <div className="flex gap-0.5 shrink-0 ml-1">
+        <button
+          onClick={onMoveUp}
+          disabled={index === 0}
+          className="w-5 h-5 flex items-center justify-center text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-default"
+          title="上移"
+        >
+          ▲
+        </button>
+        <button
+          onClick={onMoveDown}
+          disabled={index === total - 1}
+          className="w-5 h-5 flex items-center justify-center text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-30 disabled:cursor-default"
+          title="下移"
+        >
+          ▼
+        </button>
+        <button
+          onClick={onRemove}
+          className="w-5 h-5 flex items-center justify-center text-[10px] rounded bg-gray-700 hover:bg-red-900 text-red-400"
+          title="移除"
+        >
+          ✕
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** 可用卡片最上方：強化按鈕區 */
+function PracticeBuffSection({ skillId, onAddBuff }: { skillId: string; onAddBuff: (type: BuffCard['type']) => void }) {
+  const types = getBuffTypesForSkill(skillId)
+  const labels = getBuffLabels()
+  if (types.length === 0) return null
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <div style={{ fontSize: 10, color: '#888', marginBottom: 4 }}>強化</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+        {types.map((type) => (
+          <button
+            key={type}
+            onClick={() => onAddBuff(type)}
+            style={{
+              padding: '6px 10px',
+              fontSize: 11,
+              borderRadius: 6,
+              border: `1px solid ${BUFF_COLORS[type]}88`,
+              background: BUFF_COLORS[type] + '22',
+              color: BUFF_COLORS[type],
+              cursor: 'pointer',
+              fontFamily: 'monospace',
+            }}
+          >
+            + {labels[type]}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 /** 插槽中的卡片項目（含上下移動 & 移除） */
 function SlotCardItem({
@@ -714,16 +870,17 @@ function SlotCardItem({
   )
 }
 
-/** 快照預覽表格 */
-function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldown: number }) {
+/** 冰箭快照：摘要（❄️xn 🎯…）＋合併同數值的表格 */
+function SnapshotPreview({ snapshot }: { snapshot: IceArrowSnapshot }) {
+  const summaryLines = formatIceArrowStatus(snapshot)
+  const groups = getIceArrowGroups(snapshot)
   return (
     <div className="text-xs">
-      <div className="text-gray-400 mb-1">
-        冷卻 <span className="text-white">{cooldown}s</span>
-        {' · '}
-        總箭數 <span className="text-white">{arrows.length}</span>
-        {' · '}
-        發射 <span className="text-white">360° 均分</span>
+      <div className="mb-2 px-1.5 py-1 rounded bg-gray-800/60 border border-gray-700/50">
+        <div className="text-gray-400 font-medium mb-1">摘要</div>
+        {summaryLines.map((line, i) => (
+          <div key={i} className="text-gray-200">{line}</div>
+        ))}
       </div>
       <div className="border border-gray-700 rounded overflow-hidden">
         <table className="w-full">
@@ -735,17 +892,20 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
               <th className="px-1.5 py-1 text-right">穿透</th>
               <th className="px-1.5 py-1 text-center">分裂</th>
               <th className="px-1.5 py-1 text-center">追蹤</th>
-              <th className="px-1.5 py-1 text-center">彈幕</th>
+              <th className="px-1.5 py-1 text-center">小碎冰</th>
               <th className="px-1.5 py-1 text-center">失溫</th>
               <th className="px-1.5 py-1 text-center">寒氣</th>
-              <th className="px-1.5 py-1 text-center">聚合</th>
-              <th className="px-1.5 py-1 text-center">連鎖</th>
+              <th className="px-1.5 py-1 text-center">凍結</th>
+              <th className="px-1.5 py-1 text-center">噴冰</th>
+              <th className="px-1.5 py-1 text-center">反彈</th>
             </tr>
           </thead>
           <tbody>
-            {arrows.map((arrow, i) => (
+            {groups.map(({ arrow, count, startIndex }, i) => (
               <tr key={i} className="border-t border-gray-700/50">
-                <td className="px-1.5 py-1 text-gray-500">{i + 1}</td>
+                <td className="px-1.5 py-1 text-gray-500">
+                  {count > 1 ? `${startIndex}-${startIndex + count - 1}` : String(startIndex)}
+                </td>
                 <td className="px-1.5 py-1 text-right text-white">{arrow.damage}</td>
                 <td className={`px-1.5 py-1 text-right ${arrow.speed < 220 ? 'text-orange-300' : 'text-white'}`}>
                   {arrow.speed}
@@ -758,7 +918,7 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
                   {arrow.hasTracking ? <span className="text-purple-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
-                  {arrow.hasShardBarrage ? <span className="text-cyan-200">✓</span> : <span className="text-gray-600">—</span>}
+                  {arrow.hasCascade ? <span className="text-cyan-200">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
                   {arrow.chillChanceBonus > 0 ? <span className="text-green-300">+{arrow.chillChanceBonus * 100}%</span> : <span className="text-gray-600">—</span>}
@@ -767,10 +927,13 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
                   {arrow.hasColdZone ? <span className="text-yellow-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
-                  {arrow.hasConvergence ? <span className="text-blue-300">✓</span> : <span className="text-gray-600">—</span>}
+                  {arrow.hasFreeze ? <span className="text-blue-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
                 <td className="px-1.5 py-1 text-center">
-                  {arrow.hasChainExplosion ? <span className="text-orange-300">✓</span> : <span className="text-gray-600">—</span>}
+                  {arrow.hasDetonate ? <span className="text-orange-300">✓</span> : <span className="text-gray-600">—</span>}
+                </td>
+                <td className="px-1.5 py-1 text-center">
+                  {arrow.hasRicochet ? <span className="text-amber-300">✓</span> : <span className="text-gray-600">—</span>}
                 </td>
               </tr>
             ))}
@@ -783,6 +946,7 @@ function SnapshotPreview({ arrows, cooldown }: { arrows: ArrowInstance[]; cooldo
 
 /** 凍土快照預覽 */
 function IceSpikePreview({ snapshot }: { snapshot: IceSpikeSnapshot }) {
+  const summaryLines = formatIceSpikeStatus(snapshot)
   const flags: { label: string; active: boolean; color: string }[] = [
     { label: '追蹤', active: snapshot.hasTracking, color: 'text-cyan-300' },
     { label: '領域', active: snapshot.isCage, color: 'text-blue-300' },
@@ -798,16 +962,14 @@ function IceSpikePreview({ snapshot }: { snapshot: IceSpikeSnapshot }) {
 
   return (
     <div className="text-xs">
-      <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
-        <span>冷卻 <span className="text-white">{snapshot.cooldown}s</span></span>
-        <span>扇形 <span className="text-white">{snapshot.arcAngle}°</span></span>
-        <span>距離 <span className="text-white">{snapshot.castRange}px</span></span>
-        <span>持續 <span className="text-white">{snapshot.duration}s</span></span>
-        <span>傷害 <span className="text-white">{snapshot.dps}/s</span></span>
-        <span>減速 <span className="text-white">{Math.round(snapshot.slowRate * 100)}%</span></span>
+      <div className="mb-2 px-1.5 py-1 rounded bg-gray-800/60 border border-gray-700/50">
+        <div className="text-gray-400 font-medium mb-1">摘要</div>
+        {summaryLines.map((line, i) => (
+          <div key={i} className="text-gray-200">{line}</div>
+        ))}
       </div>
       {activeFlags.length > 0 && (
-        <div className="flex gap-1.5 flex-wrap mt-1">
+        <div className="flex gap-1.5 flex-wrap">
           {activeFlags.map((f) => (
             <span key={f.label} className={`px-1.5 py-0.5 rounded bg-gray-700/50 ${f.color}`}>
               {f.label}
@@ -821,7 +983,7 @@ function IceSpikePreview({ snapshot }: { snapshot: IceSpikeSnapshot }) {
 
 /** 火球快照預覽 */
 function FireballPreview({ snapshot }: { snapshot: FireballSnapshot }) {
-  // 收集全局行為標籤
+  const summaryLines = formatFireballStatus(snapshot)
   const flags: { label: string; active: boolean; color: string }[] = [
     { label: '野火', active: snapshot.fireballs.some((f) => f.hasWildfire), color: 'text-orange-300' },
     { label: '連爆', active: snapshot.fireballs.some((f) => f.hasChainExplosion), color: 'text-red-300' },
@@ -830,13 +992,14 @@ function FireballPreview({ snapshot }: { snapshot: FireballSnapshot }) {
 
   return (
     <div className="text-xs">
-      <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
-        <span>冷卻 <span className="text-white">{snapshot.cooldown}s</span></span>
-        <span>距離 <span className="text-white">{snapshot.throwDistance}px</span></span>
-        <span>數量 <span className="text-white">{snapshot.fireballs.length}</span></span>
+      <div className="mb-2 px-1.5 py-1 rounded bg-gray-800/60 border border-gray-700/50">
+        <div className="text-gray-400 font-medium mb-1">摘要</div>
+        {summaryLines.map((line, i) => (
+          <div key={i} className="text-gray-200">{line}</div>
+        ))}
       </div>
       {activeFlags.length > 0 && (
-        <div className="flex gap-1.5 flex-wrap mb-1">
+        <div className="flex gap-1.5 flex-wrap">
           {activeFlags.map((f) => (
             <span key={f.label} className={`px-1.5 py-0.5 rounded bg-gray-700/50 ${f.color}`}>
               {f.label}
@@ -886,6 +1049,7 @@ function FireballPreview({ snapshot }: { snapshot: FireballSnapshot }) {
 
 /** 電球快照預覽 */
 function ElectricBallPreview({ snapshot }: { snapshot: ElectricBallSnapshot }) {
+  const summaryLines = formatElectricBallStatus(snapshot)
   const flags: { label: string; active: boolean; color: string }[] = [
     { label: '特斯拉', active: snapshot.orbs.some((e: ElectricBallInstance) => e.hasTesla), color: 'text-purple-300' },
     { label: '磁場', active: snapshot.orbs.some((e: ElectricBallInstance) => e.hasSuperconduct), color: 'text-amber-300' },
@@ -894,9 +1058,11 @@ function ElectricBallPreview({ snapshot }: { snapshot: ElectricBallSnapshot }) {
 
   return (
     <div className="text-xs">
-      <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
-        <span>數量 <span className="text-white">{snapshot.orbs.length}</span></span>
-        <span>半徑 <span className="text-white">{snapshot.orbs[0]?.radius ?? 80}px</span></span>
+      <div className="mb-2 px-1.5 py-1 rounded bg-gray-800/60 border border-gray-700/50">
+        <div className="text-gray-400 font-medium mb-1">摘要</div>
+        {summaryLines.map((line, i) => (
+          <div key={i} className="text-gray-200">{line}</div>
+        ))}
       </div>
       {activeFlags.length > 0 && (
         <div className="flex gap-1.5 flex-wrap mb-1">
@@ -949,7 +1115,7 @@ function ElectricBallPreview({ snapshot }: { snapshot: ElectricBallSnapshot }) {
 
 /** 光束快照預覽 */
 function BeamPreview({ snapshot }: { snapshot: BeamSnapshot }) {
-  // 收集全局行為標籤
+  const summaryLines = formatBeamStatus(snapshot)
   const flags: { label: string; active: boolean; color: string }[] = [
     { label: '殘影', active: snapshot.beams.some((b) => b.hasBurningTrail), color: 'text-orange-300' },
     { label: '過載', active: snapshot.beams.some((b) => b.hasOverload), color: 'text-red-300' },
@@ -958,11 +1124,11 @@ function BeamPreview({ snapshot }: { snapshot: BeamSnapshot }) {
 
   return (
     <div className="text-xs">
-      <div className="text-gray-400 mb-1 flex gap-3 flex-wrap">
-        <span>冷卻 <span className="text-white">{snapshot.cooldown}s</span></span>
-        <span>射程 <span className="text-white">{snapshot.range}px</span></span>
-        <span>持續 <span className="text-white">{snapshot.duration}s</span></span>
-        <span>數量 <span className="text-white">{snapshot.beams.length}</span></span>
+      <div className="mb-2 px-1.5 py-1 rounded bg-gray-800/60 border border-gray-700/50">
+        <div className="text-gray-400 font-medium mb-1">摘要</div>
+        {summaryLines.map((line, i) => (
+          <div key={i} className="text-gray-200">{line}</div>
+        ))}
       </div>
       {activeFlags.length > 0 && (
         <div className="flex gap-1.5 flex-wrap mb-1">
@@ -1017,27 +1183,32 @@ function BeamPreview({ snapshot }: { snapshot: BeamSnapshot }) {
   )
 }
 
-/** 可用卡片（點擊加入插槽） */
-function AvailableCard({ card, onAdd }: { card: CardDefinition; onAdd: () => void }) {
+/** 可用卡片（點擊加入插槽）；已達數量上限時 disabled 並顯示「已達上限」 */
+function AvailableCard({ card, onAdd, disabled = false }: { card: CardDefinition; onAdd: () => void; disabled?: boolean }) {
   const colors = rarityColors[card.rarity]
 
   return (
     <button
-      onClick={onAdd}
-      className={`p-2.5 rounded-lg border ${colors.border} ${colors.bg} text-left transition-all hover:brightness-125 group`}
+      onClick={disabled ? undefined : onAdd}
+      disabled={disabled}
+      className={`p-2.5 rounded-lg border text-left transition-all group ${disabled ? 'opacity-60 cursor-not-allowed border-gray-600 bg-gray-800/50' : `${colors.border} ${colors.bg} hover:brightness-125`}`}
     >
       <div className="flex items-center justify-between mb-1">
         <span className="font-bold text-xs">{card.name}</span>
-        <span className={`text-[10px] ${colors.text}`}>{rarityNames[card.rarity]}</span>
+        <span className={`text-[10px] ${disabled ? 'text-gray-500' : colors.text}`}>{rarityNames[card.rarity]}</span>
       </div>
       <p className="text-[11px] text-gray-400 leading-relaxed mb-1">{card.description}</p>
       <p className="text-[10px] text-gray-500 leading-relaxed italic">
         ⚡ {card.orderNote}
       </p>
       <div className="text-right mt-1">
-        <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
-          + 加入插槽
-        </span>
+        {disabled ? (
+          <span className="text-[10px] text-amber-400">已達上限</span>
+        ) : (
+          <span className="text-[10px] text-cyan-400 opacity-0 group-hover:opacity-100 transition-opacity">
+            + 加入插槽
+          </span>
+        )}
       </div>
     </button>
   )

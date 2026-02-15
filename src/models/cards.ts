@@ -24,7 +24,7 @@ export interface CardDefinition {
   orderNote: string
 }
 
-/** 單支冰箭的實例快照（CardsDetail-v3） */
+/** 單支冰箭的實例快照（CardsDetail-ice-v4） */
 export interface ArrowInstance {
   damage: number
   speed: number
@@ -37,11 +37,19 @@ export interface ArrowInstance {
   hasTracking: boolean
   trackingTurnSpeed: number
   hasColdZone: boolean
-  hasConvergence: boolean
-  hasChainExplosion: boolean
-  /** 銀卡：碎冰彈幕，命中時射出 2 顆微型碎冰（各 15%） */
-  hasShardBarrage: boolean
-  /** 銅卡：失溫增幅，觸發失溫機率 +30% */
+  /** 金卡：冷到頭痛，0.5s 內擊中同一敵人 2 次 → 凍結 */
+  hasFreeze: boolean
+  /** 銀卡：不能只我冷，擊殺後爆裂 4 支碎冰箭各 25% */
+  hasDetonate: boolean
+  /** 銀卡：還有小碎冰，擊中或穿透後多分裂 1 支 50% 碎冰箭；多張可堆疊，此為支數 */
+  hasCascade: boolean
+  /** 小碎冰堆疊支數（多張「還有小碎冰」累加），0 表示無 */
+  cascadeCount?: number
+  /** 銀卡：誰亂丟冰塊，穿透+1 且擊中後改往最近敵人反彈 */
+  hasRicochet: boolean
+  /** 穿/連鎖 順序（好冰分享→穿、誰亂丟冰塊→連鎖），決定每次擊中為直飛或反彈 */
+  pierceRicochetSequence?: ('pierce' | 'ricochet')[]
+  /** 銅卡：失溫機率 +20%（可堆疊） */
   chillChanceBonus: number
 }
 
@@ -60,119 +68,121 @@ export function getBaseArrowForExtra(): ArrowInstance {
     speed: ICE_ARROW_BASE.speed,
     pierceCount: ICE_ARROW_BASE.pierceCount,
     hasSplit: false,
-    splitDamageRatio: ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio,
-    splitCount: 2,
+    splitDamageRatio: ICE_ARROW_CARD['ice-arrow-fracture'].splitDamageRatio,
+    splitCount: ICE_ARROW_CARD['ice-arrow-fracture'].splitCount,
     splitAngle: 45,
     isFragment: false,
     hasTracking: false,
     trackingTurnSpeed: 0,
     hasColdZone: false,
-    hasConvergence: false,
-    hasChainExplosion: false,
-    hasShardBarrage: false,
+    hasFreeze: false,
+    hasDetonate: false,
+    hasCascade: false,
+    hasRicochet: false,
+    pierceRicochetSequence: [],
     chillChanceBonus: 0,
+    cascadeCount: 0,
   }
 }
 
-/** 冰箭初始單支箭實例 */
-const BASE_ARROW: ArrowInstance = {
-  ...getBaseArrowForExtra(),
-}
-
-// ── 冰箭卡片定義（CardsDetail-v3：無純數值卡，銅銀金分層）──
+// ── 冰箭卡片定義（CardsDetail-ice-v4）──
 
 export const iceArrowCards: CardDefinition[] = [
-  // 銅卡：玩法改變・總值不變・未來不套用
   {
-    id: 'ice-arrow-tracking',
-    name: '追蹤冰晶',
+    id: 'ice-arrow-homing',
+    name: '冰箭追你跑',
     skillId: 'ice-arrow',
     rarity: 'bronze',
-    description: `微幅自動追蹤（${ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed}°/s），飛行速度降低 ${Math.round((1 - ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier) * 100)}%`,
-    orderNote: '爆發產生的碎片不追蹤；金卡極寒領域讓碎片擊中也產生寒氣',
+    description: `微幅追蹤 ${ICE_ARROW_CARD['ice-arrow-homing'].trackingTurnSpeed}°/s，速度 -${Math.round((1 - ICE_ARROW_CARD['ice-arrow-homing'].speedMultiplier) * 100)}%`,
+    orderNote: '追：新增的箭不繼承追蹤',
   },
   {
-    id: 'ice-arrow-chill-boost',
-    name: '失溫增幅',
+    id: 'ice-arrow-frostbite',
+    name: '好冷好冷',
     skillId: 'ice-arrow',
     rarity: 'bronze',
-    description: `觸發失溫的機率 +${Math.round(ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus * 100)}%`,
-    orderNote: '分裂→失溫：母箭與碎片都可高機率失溫；失溫→分裂：只有母箭',
+    description: `觸發失溫機率 +${Math.round(ICE_ARROW_CARD['ice-arrow-frostbite'].chillChanceBonus * 100)}%（可堆疊）`,
+    orderNote: '失溫與分裂獨立計算',
   },
-  // 銀卡：總傷害增加・未來不套用
+  {
+    id: 'ice-arrow-volley',
+    name: '砸碎冰塊',
+    skillId: 'ice-arrow',
+    rarity: 'bronze',
+    description: `箭矢數量變為兩倍，每支傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-volley'].damageMultiplier * 100)}%，總傷害維持 100%`,
+    orderNote: '加倍邏輯：所有效果複製到新箭',
+  },
+  {
+    id: 'ice-arrow-fracture',
+    name: '分享冰塊',
+    skillId: 'ice-arrow',
+    rarity: 'bronze',
+    description: `初始傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-fracture'].initialDamageRatio * 100)}%，擊中後分裂 ${ICE_ARROW_CARD['ice-arrow-fracture'].splitCount} 支碎冰箭（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-fracture'].splitDamageRatio * 100)}%），總傷害 100%`,
+    orderNote: '分xn 可堆疊',
+  },
   {
     id: 'ice-arrow-pierce',
-    name: '寒冰穿刺',
+    name: '好冰分享',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: '所有現有冰箭穿透 +1，穿透時傷害不衰減（最高可達約兩倍傷害）',
-    orderNote: '只影響放入此卡時已存在的冰箭',
+    description: '穿透 +1，原方向飛行，傷害不衰減，傷害最多可增加 100%',
+    orderNote: '穿xn 可堆疊',
   },
   {
-    id: 'ice-arrow-split',
-    name: '冰晶分裂',
+    id: 'ice-arrow-cascade',
+    name: '還有小碎冰',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: `穿透敵人後分裂成 2 支小冰箭（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio * 100)}% 傷害），主箭命中 + 碎片 = 總傷害增加`,
-    orderNote: '穿刺→分裂：碎片不穿透；分裂→穿刺：只有母箭穿透',
+    description: `擊中或穿透後多分裂 ${ICE_ARROW_CARD['ice-arrow-cascade'].shardCount} 支傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-cascade'].splitDamageRatio * 100)}% 碎冰箭`,
+    orderNote: '分xn 可堆疊',
   },
   {
-    id: 'ice-arrow-burst',
-    name: '冰晶爆發',
+    id: 'ice-arrow-ricochet',
+    name: '誰亂丟冰塊',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: `穿透後分裂成 2 支小箭（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio * 100)}% 傷害），總傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio * 2 * 100)}%`,
-    orderNote: '爆發是數量放大器：先拿則彈幕等「每支箭」效果作用於更多箭',
+    description: '穿透+1，擊中後改往最近敵人反彈，傷害不衰減',
+    orderNote: '穿xn + 連鎖',
   },
   {
-    id: 'ice-arrow-convergence',
-    name: '寒霜聚合',
+    id: 'ice-arrow-detonate',
+    name: '不能只我冷',
     skillId: 'ice-arrow',
     rarity: 'silver',
-    description: `${ICE_ARROW_CARD['ice-arrow-convergence'].requiredHitCount} 支以上冰箭 ${ICE_ARROW_CARD['ice-arrow-convergence'].convergeWindowMs / 1000}s 內擊中同一敵人 → 冰封 ${ICE_ARROW_CARD['ice-arrow-convergence'].freezeDurationMs / 1000}s，結束時受累積傷害 ${Math.round(ICE_ARROW_CARD['ice-arrow-convergence'].burstDamageRatio * 100)}% 碎冰爆傷`,
-    orderNote: '彈幕→聚合：微型碎冰計入；聚合→彈幕：只有主箭與分裂碎片計入',
+    description: `擊殺後爆裂 ${ICE_ARROW_CARD['ice-arrow-detonate'].shardCount} 支碎冰箭，每支 ${Math.round(ICE_ARROW_CARD['ice-arrow-detonate'].splitDamageRatio * 100)}%`,
+    orderNote: '噴冰',
   },
   {
-    id: 'ice-arrow-shard-barrage',
-    name: '碎冰彈幕',
-    skillId: 'ice-arrow',
-    rarity: 'silver',
-    description: `命中時射出 ${ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardCount} 顆微型碎冰（各 ${Math.round(ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardDamageRatio * 100)}% 傷害），總傷害 +${Math.round(ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardDamageRatio * ICE_ARROW_CARD['ice-arrow-shard-barrage'].shardCount * 100)}%`,
-    orderNote: '爆發→彈幕：每支 60% 箭都帶碎冰；彈幕→爆發：只有母箭帶碎冰',
-  },
-  // 金卡：未來效果也套用
-  {
-    id: 'ice-arrow-cold-zone',
-    name: '極寒領域',
+    id: 'ice-arrow-glacier',
+    name: '冰塊掉地上',
     skillId: 'ice-arrow',
     rarity: 'gold',
-    description: `所有冰箭（含未來新增）命中時產生寒氣區域（${ICE_ARROW_CARD['ice-arrow-cold-zone'].coldZoneRadius}px，${ICE_ARROW_CARD['ice-arrow-cold-zone'].coldZoneDurationMs / 1000}s），減速 ${Math.round(ICE_ARROW_CARD['ice-arrow-cold-zone'].slowRate * 100)}%、冰傷 +${Math.round(ICE_ARROW_CARD['ice-arrow-cold-zone'].iceDmgBonus * 100)}%`,
-    orderNote: '金卡：分裂碎片、彈幕碎冰擊中皆產生寒氣區',
+    description: `命中產生寒氣區（${ICE_ARROW_CARD['ice-arrow-glacier'].coldZoneRadius}px，${ICE_ARROW_CARD['ice-arrow-glacier'].coldZoneDurationMs / 1000}s），可造成失溫（未來套用）`,
+    orderNote: '金卡：所有箭套用',
   },
   {
-    id: 'ice-arrow-chain',
-    name: '冰暴連鎖',
+    id: 'ice-arrow-freeze',
+    name: '冷到頭痛',
     skillId: 'ice-arrow',
     rarity: 'gold',
-    description: `擊殺時爆裂成 ${ICE_ARROW_CARD['ice-arrow-chain'].chainCount} 支碎冰箭（${Math.round(ICE_ARROW_CARD['ice-arrow-chain'].chainDamageRatio * 100)}% 傷害），最多連鎖 ${ICE_ARROW_CARD['ice-arrow-chain'].chainCount} 次`,
-    orderNote: '金卡：碎片擊殺也能觸發連鎖',
+    description: `冰箭或碎冰 ${ICE_ARROW_CARD['ice-arrow-freeze'].convergeWindowMs / 1000}s 內擊中同一敵人 ${ICE_ARROW_CARD['ice-arrow-freeze'].requiredHitCount} 次 → 凍結 ${ICE_ARROW_CARD['ice-arrow-freeze'].freezeDurationMs / 1000}s（未來套用）`,
+    orderNote: '金卡：所有箭套用',
   },
 ]
 
 /**
- * 根據卡片序列計算冰箭快照（CardsDetail-v3）
- * 銅/銀卡：順序依賴，只影響「當下已存在」的箭
- * 金卡：全局效果，最後統一套用到所有箭
+ * 根據卡片序列計算冰箭快照（CardsDetail-ice-v4）
+ * 銅/銀卡：順序依賴；金卡：全局套用所有箭
  */
 export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArrowSnapshot {
+  const count = ICE_ARROW_BASE.count
+  const arrows: ArrowInstance[] = []
+  for (let i = 0; i < count; i++) arrows.push({ ...getBaseArrowForExtra() })
+
   const snapshot: IceArrowSnapshot = {
     cooldown: ICE_ARROW_BASE.cooldown,
     spreadAngle: ICE_ARROW_BASE.spreadAngle,
-    arrows: [
-      { ...BASE_ARROW },
-      { ...BASE_ARROW },
-      { ...BASE_ARROW },
-    ],
+    arrows,
   }
 
   const sequentialCards = cardSequence.filter((c) => c.rarity !== 'gold')
@@ -180,66 +190,61 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
 
   for (const card of sequentialCards) {
     switch (card.id) {
-      case 'ice-arrow-split':
-        for (const arrow of snapshot.arrows) {
-          arrow.hasSplit = true
-          arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio
-        }
-        break
-
-      case 'ice-arrow-pierce':
-        for (const arrow of snapshot.arrows) {
-          arrow.pierceCount += 1
-        }
-        break
-
-      case 'ice-arrow-tracking':
+      case 'ice-arrow-homing':
         for (const arrow of snapshot.arrows) {
           arrow.hasTracking = true
-          arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed
-          arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier)
+          arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-homing'].trackingTurnSpeed
+          arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-homing'].speedMultiplier)
         }
         break
-
-      case 'ice-arrow-chill-boost':
+      case 'ice-arrow-frostbite':
         for (const arrow of snapshot.arrows) {
-          arrow.chillChanceBonus = ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus
+          arrow.chillChanceBonus += ICE_ARROW_CARD['ice-arrow-frostbite'].chillChanceBonus
         }
         break
-
-      case 'ice-arrow-burst':
+      case 'ice-arrow-volley': {
+        const prev = snapshot.arrows.length
+        const mult = ICE_ARROW_CARD['ice-arrow-volley'].damageMultiplier
+        for (let i = 0; i < prev; i++) snapshot.arrows.push({ ...snapshot.arrows[i] })
+        for (const arrow of snapshot.arrows) arrow.damage = Math.round(arrow.damage * mult)
+        break
+      }
+      case 'ice-arrow-fracture':
         for (const arrow of snapshot.arrows) {
+          arrow.damage = Math.round(arrow.damage * ICE_ARROW_CARD['ice-arrow-fracture'].initialDamageRatio)
           arrow.hasSplit = true
-          arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio
+          arrow.splitCount = ICE_ARROW_CARD['ice-arrow-fracture'].splitCount
+          arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-fracture'].splitDamageRatio
         }
         break
-
-      case 'ice-arrow-convergence':
+      case 'ice-arrow-pierce':
+        for (const arrow of snapshot.arrows) arrow.pierceCount += ICE_ARROW_CARD['ice-arrow-pierce'].pierceBonus
+        break
+      case 'ice-arrow-cascade':
         for (const arrow of snapshot.arrows) {
-          arrow.hasConvergence = true
+          arrow.cascadeCount = (arrow.cascadeCount ?? 0) + 1
+          arrow.hasCascade = true
         }
         break
-
-      case 'ice-arrow-shard-barrage':
+      case 'ice-arrow-ricochet':
         for (const arrow of snapshot.arrows) {
-          arrow.hasShardBarrage = true
+          arrow.pierceCount += ICE_ARROW_CARD['ice-arrow-ricochet'].pierceBonus
+          arrow.hasRicochet = true
         }
+        break
+      case 'ice-arrow-detonate':
+        for (const arrow of snapshot.arrows) arrow.hasDetonate = true
         break
     }
   }
 
   for (const card of goldCards) {
     switch (card.id) {
-      case 'ice-arrow-cold-zone':
-        for (const arrow of snapshot.arrows) {
-          arrow.hasColdZone = true
-        }
+      case 'ice-arrow-glacier':
+        for (const arrow of snapshot.arrows) arrow.hasColdZone = true
         break
-
-      case 'ice-arrow-chain':
-        for (const arrow of snapshot.arrows) {
-          arrow.hasChainExplosion = true
-        }
+      case 'ice-arrow-freeze':
+        for (const arrow of snapshot.arrows) arrow.hasFreeze = true
         break
     }
   }
@@ -247,26 +252,67 @@ export function computeIceArrowSnapshot(cardSequence: CardDefinition[]): IceArro
   return snapshot
 }
 
-/** 對單一陣列內的箭套用一張銅/銀卡效果（in-place） */
+/** 對單一陣列內的箭套用一張銅/銀卡效果（in-place，v4） */
 export function applyIceArrowSequentialCardToArrows(card: CardDefinition, arrows: ArrowInstance[]): void {
   for (const arrow of arrows) {
     switch (card.id) {
-      case 'ice-arrow-split': arrow.hasSplit = true; arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-split'].splitDamageRatio; break
-      case 'ice-arrow-pierce': arrow.pierceCount += 1; break
-      case 'ice-arrow-tracking': arrow.hasTracking = true; arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-tracking'].trackingTurnSpeed; arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-tracking'].speedMultiplier); break
-      case 'ice-arrow-chill-boost': arrow.chillChanceBonus = ICE_ARROW_CARD['ice-arrow-chill-boost'].chillChanceBonus; break
-      case 'ice-arrow-burst': arrow.hasSplit = true; arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-burst'].splitDamageRatio; break
-      case 'ice-arrow-convergence': arrow.hasConvergence = true; break
-      case 'ice-arrow-shard-barrage': arrow.hasShardBarrage = true; break
+      case 'ice-arrow-homing':
+        arrow.hasTracking = true
+        arrow.trackingTurnSpeed = ICE_ARROW_CARD['ice-arrow-homing'].trackingTurnSpeed
+        arrow.speed = Math.round(arrow.speed * ICE_ARROW_CARD['ice-arrow-homing'].speedMultiplier)
+        break
+      case 'ice-arrow-frostbite':
+        arrow.chillChanceBonus += ICE_ARROW_CARD['ice-arrow-frostbite'].chillChanceBonus
+        break
+      case 'ice-arrow-volley':
+        break
+      case 'ice-arrow-fracture':
+        arrow.damage = Math.round(arrow.damage * ICE_ARROW_CARD['ice-arrow-fracture'].initialDamageRatio)
+        arrow.hasSplit = true
+        arrow.splitCount = ICE_ARROW_CARD['ice-arrow-fracture'].splitCount
+        arrow.splitDamageRatio = ICE_ARROW_CARD['ice-arrow-fracture'].splitDamageRatio
+        break
+      case 'ice-arrow-pierce':
+        arrow.pierceCount += ICE_ARROW_CARD['ice-arrow-pierce'].pierceBonus
+        if (!arrow.pierceRicochetSequence) arrow.pierceRicochetSequence = []
+        arrow.pierceRicochetSequence.push('pierce')
+        break
+      case 'ice-arrow-cascade':
+        arrow.cascadeCount = (arrow.cascadeCount ?? 0) + 1
+        arrow.hasCascade = true
+        break
+      case 'ice-arrow-ricochet':
+        arrow.pierceCount += ICE_ARROW_CARD['ice-arrow-ricochet'].pierceBonus
+        arrow.hasRicochet = true
+        if (!arrow.pierceRicochetSequence) arrow.pierceRicochetSequence = []
+        arrow.pierceRicochetSequence.push('ricochet')
+        break
+      case 'ice-arrow-detonate':
+        arrow.hasDetonate = true
+        break
     }
   }
 }
 
-/** 對單一箭套用一張金卡效果（in-place） */
+/** Volley 加倍箭數、每支傷害減半一次（只在此處減半，避免與 sequential 重複） */
+export function applyIceArrowVolleyDouble(arrows: ArrowInstance[]): void {
+  const len = arrows.length
+  const mult = ICE_ARROW_CARD['ice-arrow-volley'].damageMultiplier
+  for (let i = 0; i < len; i++) {
+    const src = arrows[i]!
+    arrows.push({
+      ...src,
+      pierceRicochetSequence: src.pierceRicochetSequence ? [...src.pierceRicochetSequence] : undefined,
+    })
+  }
+  for (const a of arrows) a.damage = Math.round(a.damage * mult)
+}
+
+/** 對單一箭套用一張金卡效果（in-place，v4） */
 export function applyIceArrowGoldCardToArrow(card: CardDefinition, arrow: ArrowInstance): void {
   switch (card.id) {
-    case 'ice-arrow-cold-zone': arrow.hasColdZone = true; break
-    case 'ice-arrow-chain': arrow.hasChainExplosion = true; break
+    case 'ice-arrow-glacier': arrow.hasColdZone = true; break
+    case 'ice-arrow-freeze': arrow.hasFreeze = true; break
   }
 }
 

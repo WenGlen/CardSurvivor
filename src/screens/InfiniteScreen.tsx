@@ -24,7 +24,7 @@ import { getSlotStatusLines, getSkillIcon } from '../models/skillStatus'
 import type { CardDefinition } from '../models/cards'
 import { drawGame } from '../rendering/drawFunctions'
 import type { HudConfig } from '../rendering/drawFunctions'
-import { getBuffLabels } from '../config'
+import { getBuffLabels, getFragmentWeightsForSkill } from '../config'
 import {
   createInfiniteState,
   generateCardOffer,
@@ -120,7 +120,10 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
   }, [])
 
   /** 拾取強化碎片：buff 加入 targetSlotIndex 對應卡槽的 items 序列 */
-  const onPickupCollected = useCallback((type: 'cooldown' | 'range' | 'count', targetSlotIndex: number) => {
+  const onPickupCollected = useCallback((
+    type: 'cooldown' | 'range' | 'count' | 'damage',
+    targetSlotIndex: number,
+  ) => {
     const gs = gsRef.current
     const engine = engineRef.current
     if (!engine) return
@@ -130,15 +133,39 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
 
     const buffLabel = getBuffLabels()
     const skillName = allSkills.find(s => s.id === slot.skillId)?.name ?? slot.skillId ?? ''
-    const label = type === 'count' ? `${buffLabel.count}（${skillName}）` : buffLabel[type]
+    const label = (type === 'count' || type === 'damage')
+      ? `${buffLabel[type]}（${skillName}）`
+      : buffLabel[type]
     slot.items.push({ kind: 'buff', buff: { type, label, skillId: slot.skillId } })
 
     applyAllSnapshotsWithBuffs(engine, gs)
     triggerRender()
   }, [triggerRender])
 
-  /** 生成 pickup 時解析目標卡槽（隨機選一個有效槽位） */
-  const resolvePickupTarget = useCallback((type: 'cooldown' | 'range' | 'count'): number | null => {
+  /** 生成 pickup：先抽目標槽位（有技能的），再依該技能碎片權重抽類型 */
+  const resolvePickupSpawn = useCallback((): { targetSlotIndex: number; type: 'cooldown' | 'range' | 'count' | 'damage' } | null => {
+    const gs = gsRef.current
+    const slotsWithSkill = gs.slots
+      .map((s, i) => ({ slotIndex: i, skillId: s.skillId }))
+      .filter((s): s is { slotIndex: number; skillId: string } => s.skillId != null)
+    if (slotsWithSkill.length === 0) return null
+
+    const picked = slotsWithSkill[Math.floor(Math.random() * slotsWithSkill.length)]!
+    const weights = getFragmentWeightsForSkill(picked.skillId)
+    const types = (['cooldown', 'range', 'count', 'damage'] as const).filter((t) => weights[t] > 0)
+    const w = types.map((t) => weights[t])
+    let r = Math.random()
+    let type: 'cooldown' | 'range' | 'count' | 'damage' = 'cooldown'
+    for (let i = 0; i < w.length; i++) {
+      r -= w[i]
+      if (r <= 0) { type = types[i]; break }
+      type = types[i]
+    }
+    return { targetSlotIndex: picked.slotIndex, type }
+  }, [])
+
+  /** 生成 pickup 時解析目標卡槽（舊邏輯：先類型再槽位，供 fallback） */
+  const resolvePickupTarget = useCallback((type: 'cooldown' | 'range' | 'count' | 'damage'): number | null => {
     const gs = gsRef.current
     const valid = getValidTargetSlotsForPickup(gs, type)
     if (valid.length === 0) return null
@@ -174,6 +201,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
       noInitialEnemies: true,
       onEnemyKilled: onEnemyKilled,
       enableMapPickups: true,
+      resolvePickupSpawn,
       resolvePickupTarget,
       onPickupCollected,
       ...(isMobile && { enemySpeedMultiplier: 0.7 }),
@@ -190,7 +218,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
     setCardOffer(offer)
 
     return () => engine.stop()
-  }, [triggerRender, onEnemyKilled, onPickupCollected, resolvePickupTarget])
+  }, [triggerRender, onEnemyKilled, onPickupCollected, resolvePickupSpawn, resolvePickupTarget])
 
   /** 手機模式切換時更新引擎（敵人速度） */
   useEffect(() => {
@@ -334,8 +362,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
     const gs = gsRef.current
     const engine = engineRef.current
     if (!engine) return
-
-    placeCard(gs, card)
+    if (!placeCard(gs, card)) return
 
     // 同步所有卡槽的快照到引擎（含強化碎片加成）
     applyAllSnapshotsWithBuffs(engine, gs)
@@ -383,6 +410,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
       noInitialEnemies: true,
       onEnemyKilled: onEnemyKilled,
       enableMapPickups: true,
+      resolvePickupSpawn,
       resolvePickupTarget,
       onPickupCollected,
     }
@@ -580,7 +608,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                               )
                             }
                             const b = item.buff
-                            const buffColors = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D' }
+                            const buffColors: Record<'cooldown' | 'range' | 'count' | 'damage', string> = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D', damage: '#E57373' }
                             return (
                               <div key={'b-' + j} style={{
                                 ...cardStyle,
@@ -821,7 +849,7 @@ export default function InfiniteScreen({ onExit }: { onExit: () => void }) {
                                       )
                                     }
                                     const b = item.buff
-                                    const buffColors = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D' }
+                                    const buffColors: Record<'cooldown' | 'range' | 'count' | 'damage', string> = { cooldown: '#4FC3F7', range: '#81C784', count: '#FFB74D', damage: '#E57373' }
                                     const color = buffColors[b.type]
                                     return (
                                       <div

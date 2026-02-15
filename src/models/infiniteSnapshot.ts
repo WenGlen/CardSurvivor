@@ -5,6 +5,7 @@
 import type { SlotItem } from './InfiniteGameLogic'
 import {
   BUFF_MULTIPLIERS,
+  BUFF_DAMAGE_AMOUNT,
   MIN_COOLDOWN_MULTIPLIER,
   ICE_ARROW_BASE,
   FIREBALL_BASE,
@@ -19,6 +20,7 @@ import {
   getBaseElectricBallForExtra,
   getBaseBeamForExtra,
   applyIceArrowSequentialCardToArrows,
+  applyIceArrowVolleyDouble,
   applyIceArrowGoldCardToArrow,
   applyFireballSequentialCardToFireballs,
   applyFireballGoldCardToFireball,
@@ -34,34 +36,41 @@ function cardsFromItems(items: SlotItem[]): CardDefinition[] {
   return items.filter((i): i is SlotItem & { kind: 'card' } => i.kind === 'card').map(i => i.card)
 }
 
-/** 冰箭：依序處理，count 時加入的是「到目前為止的 template」（base + 已處理的銅/銀卡），不是最後一支箭 */
+/**
+ * 冰箭：依序處理，v4 初始 4 支。
+ * 數量碎片：增加「初始數值的冰箭」— 只有基礎＋傷害碎片＋金卡，沒有貫穿、分裂、追蹤等銅/銀卡效果。
+ */
 export function computeIceArrowSnapshotFromSequence(items: SlotItem[]): IceArrowSnapshot {
-  const template = { ...getBaseArrowForExtra() }
-  const arrows: IceArrowSnapshot['arrows'] = [
-    { ...getBaseArrowForExtra() },
-    { ...getBaseArrowForExtra() },
-    { ...getBaseArrowForExtra() },
-  ]
+  const initialCount = ICE_ARROW_BASE.count
+  const arrows: IceArrowSnapshot['arrows'] = []
+  for (let i = 0; i < initialCount; i++) arrows.push({ ...getBaseArrowForExtra() })
   const goldCards: CardDefinition[] = []
   let cooldown = ICE_ARROW_BASE.cooldown
+
+  /** 僅用於「數量+1」：初始數值 = 基礎 + 金卡，不套用銅/銀卡、不繼承傷害碎片 */
+  const countTemplate = { ...getBaseArrowForExtra() }
 
   for (const item of items) {
     if (item.kind === 'card') {
       const card = item.card
       if (card.rarity === 'gold') {
         goldCards.push(card)
-        applyIceArrowGoldCardToArrow(card, template)
+        applyIceArrowGoldCardToArrow(card, countTemplate)
         for (const a of arrows) applyIceArrowGoldCardToArrow(card, a)
       } else {
-        applyIceArrowSequentialCardToArrows(card, [template])
         applyIceArrowSequentialCardToArrows(card, arrows)
+        if (card.id === 'ice-arrow-volley') {
+          applyIceArrowVolleyDouble(arrows)
+        }
       }
     } else if (item.kind === 'buff') {
       if (item.buff.type === 'cooldown') cooldown *= BUFF_MULTIPLIERS.cooldown
       if (item.buff.type === 'count') {
-        const newArrow = { ...template }
-        for (const g of goldCards) applyIceArrowGoldCardToArrow(g, newArrow)
-        arrows.push(newArrow)
+        arrows.push({ ...countTemplate })
+      }
+      if (item.buff.type === 'damage') {
+        const amount = BUFF_DAMAGE_AMOUNT['ice-arrow'] ?? 0
+        for (const a of arrows) a.damage += amount
       }
     }
   }

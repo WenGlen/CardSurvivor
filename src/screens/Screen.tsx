@@ -2,8 +2,9 @@ import { useState } from 'react'
 import LoginScreen from './LoginScreen'
 import PracticeScreen from './PracticeScreen'
 import InfiniteScreen from './InfiniteScreen'
+import MasteryScreen from './MasteryScreen'
 
-type ScreenName = 'login' | 'mode-select' | 'practice' | 'infinite'
+type ScreenName = 'login' | 'mode-select' | 'practice' | 'infinite' | 'mastery'
 
 /** 簡易畫面路由 */
 export default function Screen() {
@@ -18,6 +19,8 @@ export default function Screen() {
       return <PracticeScreen onExit={() => setScreen('mode-select')} />
     case 'infinite':
       return <InfiniteScreen onExit={() => setScreen('mode-select')} />
+    case 'mastery':
+      return <MasteryScreen onExit={() => setScreen('mode-select')} />
     default:
       return <ModeSelectScreen onSelect={setScreen} />
   }
@@ -61,6 +64,24 @@ function ModeSelectScreen({ onSelect }: { onSelect: (screen: ScreenName) => void
         <div>無限模式</div>
         <div style={{ fontSize: 'clamp(10px, 2vw, 12px)', color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
           波次挑戰 · 抽卡強化 · 挑戰最高分
+        </div>
+      </button>
+
+      <button
+        onClick={() => onSelect('mastery')}
+        style={{
+          width: 'min(280px, 90vw)', padding: 'clamp(12px, 2.5vw, 16px) clamp(20px, 4vw, 24px)',
+          borderRadius: 12, cursor: 'pointer',
+          background: '#2a2a3e', border: '2px solid #9C27B0', color: '#fff',
+          fontSize: 'clamp(14px, 3vw, 18px)', fontWeight: 'bold', fontFamily: 'monospace',
+          transition: 'transform 0.15s',
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.transform = 'scale(1.03)' }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = '' }}
+      >
+        <div>專精大師</div>
+        <div style={{ fontSize: 'clamp(10px, 2vw, 12px)', color: '#aaa', marginTop: 4, fontWeight: 'normal' }}>
+          單一技能 · 拾星升級 · 三選一 40% 卡 / 60% 碎片
         </div>
       </button>
 

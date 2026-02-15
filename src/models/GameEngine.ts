@@ -1,4 +1,4 @@
-import type { Entity, Projectile, Position, DamageNumber, ColdZone, FrozenGroundZone, FrozenGroundMine, FrozenGroundShard, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, OrbitalOrb, ElectricExplosion, BeamEffect, BeamSegment, BeamTrail, SkillDefinition, MapPickup } from './types'
+import type { Entity, Projectile, Position, DamageNumber, ColdZone, FrozenGroundZone, FrozenGroundMine, FrozenGroundShard, ResonanceWave, FireballProjectile, FireExplosion, LavaZone, BurningCorpse, OrbitalOrb, ElectricExplosion, BeamEffect, BeamSegment, BeamTrail, SkillDefinition, MapPickup, StarPickup } from './types'
 import type { IceArrowSnapshot, IceSpikeSnapshot, FireballSnapshot, ElectricBallSnapshot, BeamSnapshot } from './cards'
 import {
   PICKUP_TYPE_WEIGHTS,
@@ -9,6 +9,8 @@ import {
   SLOW_MOVE_MULTIPLIER,
   COOLDOWN_MULTIPLIER_BOUNDS,
   RANGE_MULTIPLIER_BOUNDS,
+  ICE_ARROW_BASE,
+  ICE_ARROW_CARD,
   ELECTRIC_BALL_BASE,
   ELECTRIC_BALL_CARD,
 } from '../config'
@@ -31,10 +33,20 @@ export interface GameModeConfig {
   noInitialEnemies?: boolean
   /** 地圖上隨機出現強化碎片 */
   enableMapPickups?: boolean
-  /** 生成時解析目標卡槽，回傳 null 則不生成 */
-  resolvePickupTarget?: (type: 'cooldown' | 'range' | 'count') => number | null
+  /** 生成時解析目標卡槽與類型（依技能決定碎片類型機率），回傳 null 則不生成。若未提供則用 resolvePickupTarget 舊邏輯 */
+  resolvePickupSpawn?: () => { targetSlotIndex: number; type: MapPickup['type'] } | null
+  /** 生成時解析目標卡槽（舊邏輯：先抽類型再找槽位），回傳 null 則不生成 */
+  resolvePickupTarget?: (type: MapPickup['type']) => number | null
   /** 拾取碎片時回呼（targetSlotIndex 為生成時指定的卡槽） */
-  onPickupCollected?: (type: 'cooldown' | 'range' | 'count', targetSlotIndex: number) => void
+  onPickupCollected?: (type: MapPickup['type'], targetSlotIndex: number) => void
+  /** 專精大師：地上星星，拾取後觸發三選一 */
+  enableMapStars?: boolean
+  /** 拾取星星時回呼 */
+  onStarCollected?: () => void
+  /** 星星拾取半徑（px），預設 28 */
+  starCollectRadius?: number
+  /** 星星存在時長（ms） */
+  starDurationMs?: number
   /** 敵人速度倍率（手機版可設 0.7 降低難度） */
   enemySpeedMultiplier?: number
   /** 主角移動邊界（手機 object-fit cover 時依可見範圍限制） */
@@ -73,6 +85,8 @@ export interface GameState {
   playerFacingAngle: number
   /** 地圖掉落物（無限模式） */
   mapPickups: MapPickup[]
+  /** 專精大師：地上星星 */
+  mapStars: StarPickup[]
 }
 
 /** 遊戲引擎 - 管理遊戲循環（練習場 / 無限模式） */
@@ -84,7 +98,8 @@ export class GameEngine {
   private fireballSnapshot: FireballSnapshot | null = null
   private electricBallSnapshot: ElectricBallSnapshot | null = null
   private beamSnapshot: BeamSnapshot | null = null
-  private convergenceTracker: Map<string, { time: number; damage: number; hitCount: number }[]> = new Map()
+  /** 冰箭金卡冷到頭痛：追蹤 0.5s 內命中次數，2 次 → 凍結 */
+  private freezeTracker: Map<string, { time: number; damage: number; hitCount: number }[]> = new Map()
   private enemyMaxHp = 9999
   private nextId = 0
   private lastTime = 0
@@ -162,6 +177,7 @@ export class GameEngine {
         ? Math.atan2(initialEnemies[0].position.y - canvasHeight / 2, initialEnemies[0].position.x - canvasWidth / 3)
         : 0,
       mapPickups: [],
+      mapStars: [],
     }
   }
 
@@ -302,15 +318,23 @@ export class GameEngine {
         x = player.position.x + Math.cos(angle) * 100
         y = player.position.y + Math.sin(angle) * 100
       }
-      const types: Array<'cooldown' | 'range' | 'count'> = ['cooldown', 'range', 'count']
-      const weights = [PICKUP_TYPE_WEIGHTS.cooldown, PICKUP_TYPE_WEIGHTS.range, PICKUP_TYPE_WEIGHTS.count]
-      let r = Math.random()
-      let type: 'cooldown' | 'range' | 'count' = 'cooldown'
-      for (let i = 0; i < weights.length; i++) {
-        r -= weights[i]
-        if (r <= 0) { type = types[i]; break }
+      let targetSlot: number | null = null
+      let type: MapPickup['type'] = 'cooldown'
+      if (this.modeConfig.resolvePickupSpawn) {
+        const result = this.modeConfig.resolvePickupSpawn()
+        if (result == null) return
+        targetSlot = result.targetSlotIndex
+        type = result.type
+      } else {
+        const types: MapPickup['type'][] = ['cooldown', 'range', 'count', 'damage']
+        const weights = types.map((t) => PICKUP_TYPE_WEIGHTS[t])
+        let r = Math.random()
+        for (let i = 0; i < weights.length; i++) {
+          r -= weights[i]
+          if (r <= 0) { type = types[i]; break }
+        }
+        targetSlot = this.modeConfig.resolvePickupTarget?.(type) ?? null
       }
-      const targetSlot = this.modeConfig.resolvePickupTarget?.(type)
       if (targetSlot == null) return
       mapPickups.push({
         id: this.genId(),
@@ -400,6 +424,38 @@ export class GameEngine {
   }
   private effRange(base: number) { return Math.round(base * this.rangeMultiplier) }
 
+  /** 專精大師：新增一顆星星到地圖（由畫面依間隔呼叫） */
+  addStar(position: Position) {
+    const duration = this.modeConfig.starDurationMs ?? 12_000
+    this.state.mapStars.push({
+      id: `star-${this.genId()}`,
+      position: { ...position },
+      createdAt: performance.now(),
+      duration,
+    })
+  }
+
+  /** 專精大師：更新星星（過期移除、拾取判定） */
+  private updateMapStars() {
+    const now = performance.now()
+    const { player, mapStars } = this.state
+    const radius = this.modeConfig.starCollectRadius ?? 28
+
+    for (let i = mapStars.length - 1; i >= 0; i--) {
+      const s = mapStars[i]
+      if (now - s.createdAt >= s.duration) {
+        mapStars.splice(i, 1)
+        continue
+      }
+      const dx = player.position.x - s.position.x
+      const dy = player.position.y - s.position.y
+      if (dx * dx + dy * dy < radius * radius) {
+        mapStars.splice(i, 1)
+        this.modeConfig.onStarCollected?.()
+      }
+    }
+  }
+
   /** 從畫面邊緣生成敵人（無限模式） */
   spawnEnemyAtEdge(config: { hp: number; speed: number; size: number; color: string }) {
     const { canvasWidth, canvasHeight, player } = this.state
@@ -466,7 +522,7 @@ export class GameEngine {
     this.state.burningCorpses = []
     this.state.coldZones = []
     this.state.damageNumbers = []
-    this.convergenceTracker.clear()
+    this.freezeTracker.clear()
   }
 
   /** 重置玩家位置到畫面中央 */
@@ -564,6 +620,11 @@ export class GameEngine {
     // 地圖掉落物（無限模式）
     if (this.modeConfig.enableMapPickups) {
       this.updateMapPickups()
+    }
+
+    // 專精大師：星星過期與拾取判定
+    if (this.modeConfig.enableMapStars) {
+      this.updateMapStars()
     }
 
     // 批次移除死亡敵人
@@ -723,11 +784,14 @@ export class GameEngine {
         hasTracking: arrow.hasTracking,
         trackingTurnSpeed: arrow.trackingTurnSpeed,
         hasColdZone: arrow.hasColdZone,
-        hasConvergence: arrow.hasConvergence,
-        hasChainExplosion: arrow.hasChainExplosion,
-        hasShardBarrage: arrow.hasShardBarrage,
+        hasFreeze: arrow.hasFreeze ?? false,
+        hasDetonate: arrow.hasDetonate ?? false,
+        hasCascade: arrow.hasCascade ?? false,
+        cascadeCount: (arrow as { cascadeCount?: number }).cascadeCount ?? (arrow.hasCascade ? 1 : 0),
+        hasRicochet: arrow.hasRicochet ?? false,
+        pierceRicochetSequence: arrow.pierceRicochetSequence?.length ? [...arrow.pierceRicochetSequence] : undefined,
+        hitCount: 0,
         chillChanceBonus: arrow.chillChanceBonus ?? 0,
-        chainDepth: 0,
         hitEnemies: new Set(),
         alive: true,
       })
@@ -772,11 +836,11 @@ export class GameEngine {
         hasTracking: false,
         trackingTurnSpeed: 0,
         hasColdZone: false,
-        hasConvergence: false,
-        hasChainExplosion: false,
-        hasShardBarrage: false,
+        hasFreeze: false,
+        hasDetonate: false,
+        hasCascade: false,
+        hasRicochet: false,
         chillChanceBonus: 0,
-        chainDepth: 0,
         hitEnemies: new Set(),
         alive: true,
       })
@@ -2135,12 +2199,13 @@ export class GameEngine {
     )
   }
 
-  private findNearestEnemy(from: Position): Entity | null {
+  private findNearestEnemy(from: Position, excludeEnemyId?: string): Entity | null {
     let nearest: Entity | null = null
     let minDist = Infinity
 
     for (const enemy of this.state.enemies) {
       if (enemy.hp <= 0) continue
+      if (excludeEnemyId && enemy.id === excludeEnemyId) continue
       const dist = this.distance(from, enemy.position)
       if (dist < minDist) {
         minDist = dist
@@ -2191,47 +2256,60 @@ export class GameEngine {
           proj.hitEnemies.add(enemy.id)
           this.spawnDamageNumber(enemy.position, proj.damage)
 
-          // 失溫效果：冰箭機率觸發（基礎 15% + chillChanceBonus），減速 2 秒
+          // 失溫效果：冰箭機率觸發（基礎 20% + chillChanceBonus），減速 3s（v4）
           if (proj.skillId === 'ice-arrow') {
-            const baseChill = 0.15
+            const baseChill = ICE_ARROW_BASE.chillChanceBase ?? 0.2
             const chillChance = baseChill + (proj.chillChanceBonus ?? 0)
             if (Math.random() < chillChance) {
-              enemy.slowUntil = Math.max(enemy.slowUntil ?? 0, performance.now() + 2000)
+              enemy.slowUntil = Math.max(enemy.slowUntil ?? 0, performance.now() + 3000)
             }
           }
 
-          // 寒霜聚合追蹤（主箭或碎冰命中，hitCount=1）
-          if (proj.hasConvergence) {
-            this.trackConvergence(enemy, proj.damage, 1)
+          // 金卡冷到頭痛：0.5s 內 2 次命中同一敵人 → 凍結
+          if (proj.hasFreeze) {
+            this.trackFreeze(enemy, proj.damage, 1)
           }
 
-          // 碎冰彈幕：命中時射出 2 顆微型碎冰（各 15% 傷害）
-          if (proj.hasShardBarrage && proj.skillId === 'ice-arrow') {
-            const shards = this.spawnShardBarrageFragments(proj, enemy.id)
+          // 銀卡還有小碎冰：擊中或穿透後多分裂 1 支 50% 碎冰箭
+          if (proj.hasCascade && proj.skillId === 'ice-arrow') {
+            const shards = this.spawnCascadeFragments(proj, enemy.id)
             newProjectiles.push(...shards)
           }
 
           // 擊殺判定
           if (enemy.hp <= 0) {
-            // 冰暴連鎖（需在移除前執行）
-            if (proj.hasChainExplosion && proj.chainDepth < 3) {
-              const chains = this.spawnChainFragments(proj, enemy.position, enemy.id)
-              newProjectiles.push(...chains)
+            if (proj.hasDetonate && proj.skillId === 'ice-arrow') {
+              const det = this.spawnDetonateFragments(proj, enemy.position, enemy.id)
+              newProjectiles.push(...det)
             }
-            this.convergenceTracker.delete(enemy.id)
+            this.freezeTracker.delete(enemy.id)
             this.handleEnemyDeath(enemy)
           }
 
-          // 寒氣區域
-          if (proj.hasColdZone) {
-            this.spawnColdZone(proj.position)
-          }
+          if (proj.hasColdZone) this.spawnColdZone(proj.position)
 
-          // 分裂
           if (proj.hasSplit && !proj.isFragment) {
             const fragments = this.spawnSplitFragments(proj, enemy.id)
             newProjectiles.push(...fragments)
           }
+
+          // 銀卡誰亂丟冰塊：擊中後改往最近敵人反彈（依順序；反彈後清空已擊中列表，可再次命中同一敵人）
+          const hitIndex = proj.hitCount ?? 0
+          const behavior = (proj.pierceRicochetSequence as ('pierce' | 'ricochet')[] | undefined)?.[hitIndex] ?? (proj.hasRicochet ? 'ricochet' as const : 'pierce' as const)
+          if (behavior === 'ricochet' && proj.skillId === 'ice-arrow') {
+            const next = this.findNearestEnemy(proj.position, enemy.id)
+            if (next) {
+              const angle = Math.atan2(
+                next.position.y - proj.position.y,
+                next.position.x - proj.position.x,
+              )
+              proj.velocity.x = Math.cos(angle) * proj.speed
+              proj.velocity.y = Math.sin(angle) * proj.speed
+              proj.hitEnemies.clear()
+              proj.hitEnemies.add(enemy.id)
+            }
+          }
+          proj.hitCount = hitIndex + 1
 
           if (proj.pierceCount > 0) {
             proj.pierceCount--
@@ -2323,11 +2401,11 @@ export class GameEngine {
         hasTracking: false,
         trackingTurnSpeed: 0,
         hasColdZone: parent.hasColdZone,
-        hasConvergence: parent.hasConvergence,
-        hasChainExplosion: parent.hasChainExplosion,
-        hasShardBarrage: false,
+        hasFreeze: parent.hasFreeze ?? false,
+        hasDetonate: false,
+        hasCascade: false,
+        hasRicochet: false,
         chillChanceBonus: parent.chillChanceBonus ?? 0,
-        chainDepth: parent.chainDepth,
         hitEnemies: new Set([hitEnemyId]),
         alive: true,
       })
@@ -2336,22 +2414,25 @@ export class GameEngine {
     return fragments
   }
 
-  /** 碎冰彈幕：產生 2 顆微型碎冰（各 15% 傷害，±45°） */
-  private spawnShardBarrageFragments(parent: Projectile, hitEnemyId: string): Projectile[] {
-    const fragments: Projectile[] = []
+  /** 銀卡還有小碎冰：擊中或穿透後多分裂 N 支 50% 碎冰箭（N = cascadeCount，可堆疊） */
+  private spawnCascadeFragments(parent: Projectile, hitEnemyId: string): Projectile[] {
+    const count = Math.max(1, parent.cascadeCount ?? (parent.hasCascade ? 1 : 0))
+    const ratio = 0.5
+    const shardDamage = Math.max(1, Math.round(parent.damage * ratio))
     const baseAngle = Math.atan2(parent.velocity.y, parent.velocity.x)
-    const shardDamage = Math.max(1, Math.round(parent.damage * 0.15))
-    const shardSpeed = parent.speed * 0.6
-
-    for (const offsetDeg of [-45, 45]) {
-      const angle = baseAngle + (offsetDeg * Math.PI) / 180
+    const speed = parent.speed * 0.8
+    const spreadRad = count > 1 ? (Math.PI / 6) : 0
+    const fragments: Projectile[] = []
+    for (let i = 0; i < count; i++) {
+      const angleOffset = count === 1 ? 0 : -spreadRad / 2 + (spreadRad / Math.max(1, count - 1)) * i
+      const angle = baseAngle + angleOffset
       fragments.push({
         id: this.genId(),
         skillId: parent.skillId,
         position: { x: parent.position.x, y: parent.position.y },
-        velocity: { x: Math.cos(angle) * shardSpeed, y: Math.sin(angle) * shardSpeed },
+        velocity: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
         damage: shardDamage,
-        speed: shardSpeed,
+        speed,
         pierceCount: 0,
         hasSplit: false,
         splitDamageRatio: 0,
@@ -2360,17 +2441,16 @@ export class GameEngine {
         isFragment: true,
         hasTracking: false,
         trackingTurnSpeed: 0,
-        hasColdZone: parent.hasColdZone,
-        hasConvergence: parent.hasConvergence,
-        hasChainExplosion: parent.hasChainExplosion,
-        hasShardBarrage: false,
+        hasColdZone: parent.hasColdZone ?? false,
+        hasFreeze: parent.hasFreeze ?? false,
+        hasDetonate: false,
+        hasCascade: false,
+        hasRicochet: false,
         chillChanceBonus: parent.chillChanceBonus ?? 0,
-        chainDepth: parent.chainDepth,
         hitEnemies: new Set([hitEnemyId]),
         alive: true,
       })
     }
-
     return fragments
   }
 
@@ -2386,27 +2466,27 @@ export class GameEngine {
     })
   }
 
-  /** 寒霜聚合：追蹤命中紀錄，3+ 支冰箭在 0.5s 內擊中同一敵人觸發冰封 */
-  private trackConvergence(enemy: Entity, damage: number, hitCount = 1) {
+  /** 金卡冷到頭痛：0.5s 內 2 次命中同一敵人 → 凍結 1.5s，凍結中所受傷害 +25% */
+  private trackFreeze(enemy: Entity, damage: number, hitCount = 1) {
     if (enemy.frozenUntil > 0 && performance.now() < enemy.frozenUntil) return
 
     const now = performance.now()
-    const record = this.convergenceTracker.get(enemy.id) ?? []
+    const cfg = ICE_ARROW_CARD['ice-arrow-freeze']
+    const record = this.freezeTracker.get(enemy.id) ?? []
     record.push({ time: now, damage, hitCount })
 
-    const recent = record.filter((r) => now - r.time < 500)
-    this.convergenceTracker.set(enemy.id, recent)
+    const recent = record.filter((r) => now - r.time < cfg.convergeWindowMs)
+    this.freezeTracker.set(enemy.id, recent)
 
     const totalHits = recent.reduce((sum, r) => sum + r.hitCount, 0)
-    if (totalHits >= 3) {
-      const accDamage = recent.reduce((sum, r) => sum + r.damage, 0)
-      enemy.frozenUntil = now + 2000
-      enemy.frozenDamage = Math.round(accDamage * 0.5)
-      this.convergenceTracker.set(enemy.id, [])
+    if (totalHits >= cfg.requiredHitCount) {
+      enemy.frozenUntil = now + cfg.freezeDurationMs
+      enemy.frozenDamage = 0
+      this.freezeTracker.set(enemy.id, [])
     }
   }
 
-  /** 處理冰封到期 → 碎冰爆傷 */
+  /** 處理冰封到期（v4 凍結期間無額外爆傷，僅無法移動） */
   private updateFrozenEnemies() {
     const now = performance.now()
     for (const enemy of this.state.enemies) {
@@ -2414,9 +2494,7 @@ export class GameEngine {
         if (enemy.frozenDamage > 0) {
           enemy.hp -= enemy.frozenDamage
           this.spawnDamageNumber(enemy.position, enemy.frozenDamage, '#90CAF9')
-          if (enemy.hp <= 0) {
-            this.handleEnemyDeath(enemy)
-          }
+          if (enemy.hp <= 0) this.handleEnemyDeath(enemy)
         }
         enemy.frozenUntil = 0
         enemy.frozenDamage = 0
@@ -2424,20 +2502,21 @@ export class GameEngine {
     }
   }
 
-  /** 冰暴連鎖：擊殺爆裂成 3 支隨機方向碎冰箭 */
-  private spawnChainFragments(proj: Projectile, enemyPos: Position, hitEnemyId: string): Projectile[] {
-    const fragments: Projectile[] = []
-    const chainDamage = Math.round(proj.damage * 0.4)
+  /** 銀卡不能只我冷：擊殺後爆裂 4 支碎冰箭各 25% */
+  private spawnDetonateFragments(proj: Projectile, enemyPos: Position, hitEnemyId: string): Projectile[] {
+    const cfg = ICE_ARROW_CARD['ice-arrow-detonate']
+    const shardDamage = Math.max(1, Math.round(proj.damage * cfg.splitDamageRatio))
     const speed = proj.speed * 0.8
+    const fragments: Projectile[] = []
 
-    for (let i = 0; i < 3; i++) {
-      const angle = Math.random() * Math.PI * 2
+    for (let i = 0; i < cfg.shardCount; i++) {
+      const angle = (Math.PI * 2 * i) / cfg.shardCount + Math.random() * 0.5
       fragments.push({
         id: this.genId(),
         skillId: proj.skillId,
         position: { x: enemyPos.x, y: enemyPos.y },
         velocity: { x: Math.cos(angle) * speed, y: Math.sin(angle) * speed },
-        damage: chainDamage,
+        damage: shardDamage,
         speed,
         pierceCount: 0,
         hasSplit: false,
@@ -2447,12 +2526,12 @@ export class GameEngine {
         isFragment: true,
         hasTracking: false,
         trackingTurnSpeed: 0,
-        hasColdZone: proj.hasColdZone,
-        hasConvergence: false,
-        hasChainExplosion: true,
-        hasShardBarrage: false,
-        chillChanceBonus: 0,
-        chainDepth: proj.chainDepth + 1,
+        hasColdZone: proj.hasColdZone ?? false,
+        hasFreeze: proj.hasFreeze ?? false,
+        hasDetonate: false,
+        hasCascade: false,
+        hasRicochet: false,
+        chillChanceBonus: proj.chillChanceBonus ?? 0,
         hitEnemies: new Set([hitEnemyId]),
         alive: true,
       })
@@ -2572,7 +2651,7 @@ export class GameEngine {
       enemy.burnDps = 0
       enemy.burnUntil = 0
     }
-    this.convergenceTracker.clear()
+    this.freezeTracker.clear()
     this.state.projectiles = []
     this.state.damageNumbers = []
     this.state.coldZones = []
@@ -2603,7 +2682,7 @@ export class GameEngine {
       enemy.burnDps = 0
       enemy.burnUntil = 0
     }
-    this.convergenceTracker.clear()
+    this.freezeTracker.clear()
     this.state.iceSpikeMines = []
     this.state.frozenGroundShards = []
     this.state.resonanceWaves = []

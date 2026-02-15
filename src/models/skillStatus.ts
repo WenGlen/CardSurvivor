@@ -16,7 +16,6 @@ import type {
   BeamInstance,
 } from './cards'
 import {
-  ICE_ARROW_CARD,
   ICE_SPIKE_CARD,
   FIREBALL_CARD,
   ELECTRIC_BALL_BASE,
@@ -45,36 +44,81 @@ export function getSkillIcon(skillId: string): string {
   return SKILL_ICONS[skillId] ?? '◆'
 }
 
-/** 冰箭：單支箭效果 → 短標籤字串（含數值） */
-function formatArrowInstance(a: ArrowInstance): string {
-  const tags: string[] = []
-  if (a.hasTracking) tags.push('追')
-  if (a.hasSplit) tags.push(`裂${Math.round(a.splitDamageRatio * 100)}%`)
-  if (a.chillChanceBonus > 0) tags.push(`${Math.round(a.chillChanceBonus * 100)}%失溫`)
-  if (a.hasConvergence) {
-    const cfg = ICE_ARROW_CARD['ice-arrow-convergence']
-    tags.push(`聚${cfg.requiredHitCount}支${cfg.convergeWindowMs / 1000}s`)
-  }
-  if (a.hasShardBarrage) {
-    const cfg = ICE_ARROW_CARD['ice-arrow-shard-barrage']
-    tags.push(`彈${Math.round(cfg.shardDamageRatio * 100)}%`)
-  }
-  if (a.pierceCount > 0) tags.push(`穿${a.pierceCount}`)
-  if (a.hasColdZone) {
-    const cfg = ICE_ARROW_CARD['ice-arrow-cold-zone']
-    tags.push(`寒${cfg.coldZoneRadius}px`)
-  }
-  if (a.hasChainExplosion) {
-    const cfg = ICE_ARROW_CARD['ice-arrow-chain']
-    tags.push(`連${Math.round(cfg.chainDamageRatio * 100)}%`)
-  }
-  return tags.length > 0 ? tags.join('＋') : '—'
+/** 冰箭：用於分組的簽名（含穿/連鎖順序） */
+function iceArrowSignature(a: ArrowInstance): string {
+  return [
+    a.damage,
+    a.speed,
+    a.pierceCount,
+    (a.pierceRicochetSequence ?? []).join(','),
+    a.hasTracking ? 1 : 0,
+    a.chillChanceBonus,
+    a.hasSplit ? `${a.splitCount}-${a.splitDamageRatio}` : '',
+    (a as { cascadeCount?: number }).cascadeCount ?? (a.hasCascade ? 1 : 0),
+    a.hasRicochet ? 1 : 0,
+    a.hasDetonate ? 1 : 0,
+    a.hasColdZone ? 1 : 0,
+    a.hasFreeze ? 1 : 0,
+  ].join('_')
 }
 
-/** 冰箭快照 → 冷卻＋每支箭一行 */
+/**
+ * 冰箭：依規格「摘要縮寫」→ ❄️ x{n} 🎯… 🌡️… +追 +穿＋連鎖＋穿…（順序依 pierceRicochetSequence，連鎖可疊加 連鎖x2）
+ */
+function formatArrowInstance(a: ArrowInstance, groupCount: number): string {
+  const parts: string[] = []
+  parts.push(`🎯${a.damage}`)
+  if (a.chillChanceBonus > 0) parts.push(`🌡️${Math.round(a.chillChanceBonus * 100)}%`)
+  if (a.hasTracking) parts.push(groupCount > 1 ? `+追x${groupCount}` : '+追')
+  if ((a.pierceRicochetSequence?.length ?? 0) > 0) {
+    const seq = a.pierceRicochetSequence!
+    let i = 0
+    while (i < seq.length) {
+      const kind = seq[i]!
+      let n = 0
+      while (i < seq.length && seq[i] === kind) { n++; i++ }
+      parts.push(kind === 'ricochet' ? (n > 1 ? `+連鎖x${n}` : '+連鎖') : (n > 1 ? `+穿x${n}` : '+穿'))
+    }
+  } else if (a.pierceCount > 0 || a.hasRicochet) {
+    if (a.pierceCount > 0) parts.push(`+穿${a.pierceCount}`)
+    if (a.hasRicochet) parts.push('+連鎖')
+  }
+  if (a.hasSplit) parts.push(`+分${a.splitCount}`)
+  const cascadeN = (a as { cascadeCount?: number }).cascadeCount ?? (a.hasCascade ? 1 : 0)
+  if (cascadeN > 0) parts.push(cascadeN > 1 ? `+分x${cascadeN}` : '+分1')
+  if (a.hasDetonate) parts.push('+噴冰')
+  if (a.hasColdZone) parts.push('+凍土')
+  if (a.hasFreeze) parts.push('+凍')
+  return parts.join(' ')
+}
+
+/** 冰箭快照依相同數值分組（全域合併，含雜碎冰塊加倍後仍顯示 x8 / x2）startIndex 為該組首次出現的 1-based 索引 */
+export function getIceArrowGroups(snapshot: IceArrowSnapshot): { arrow: ArrowInstance; count: number; startIndex: number }[] {
+  const bySig = new Map<string, { arrow: ArrowInstance; count: number; firstIndex: number }>()
+  for (let i = 0; i < snapshot.arrows.length; i++) {
+    const a = snapshot.arrows[i]!
+    const sig = iceArrowSignature(a)
+    const existing = bySig.get(sig)
+    if (existing) {
+      existing.count += 1
+    } else {
+      bySig.set(sig, { arrow: a, count: 1, firstIndex: i + 1 })
+    }
+  }
+  return [...bySig.values()]
+    .sort((x, y) => x.firstIndex - y.firstIndex)
+    .map(({ arrow, count, firstIndex }) => ({ arrow, count, startIndex: firstIndex }))
+}
+
+/** 冰箭快照 → 冷卻＋數量；相同數值整併為「❄️ x{n} 🎯… 🌡️… +追 +穿 +分…」 */
 export function formatIceArrowStatus(snapshot: IceArrowSnapshot): string[] {
-  const header = `冷${snapshot.cooldown.toFixed(1)}s`
-  const lines = snapshot.arrows.map((a) => `${SKILL_ICONS['ice-arrow']} ${formatArrowInstance(a)}`)
+  const header = `冷${snapshot.cooldown.toFixed(1)}s · ${snapshot.arrows.length}支 · 360° 均分`
+  const groups = getIceArrowGroups(snapshot)
+  const lines = groups.map(({ arrow, count }) => {
+    const tags = formatArrowInstance(arrow, count)
+    const prefix = `x${count} `
+    return `${SKILL_ICONS['ice-arrow']} ${prefix}${tags}`
+  })
   return [header, ...lines]
 }
 

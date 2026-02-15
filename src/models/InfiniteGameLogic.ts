@@ -8,6 +8,7 @@ import {
   SCORE,
   MAX_ENEMIES,
   getRarityWeights,
+  getCardMaxCount,
 } from '../config'
 
 // ── 型別定義 ──
@@ -35,7 +36,7 @@ export interface ScoreState {
 
 /** 強化碎片卡（拾取後疊在卡槽上，順序影響技能快照） */
 export interface BuffCard {
-  type: 'cooldown' | 'range' | 'count'
+  type: 'cooldown' | 'range' | 'count' | 'damage'
   label: string
   skillId?: string
 }
@@ -242,18 +243,24 @@ export function generateCardOffer(
   const weights = getRarityWeightsForWave(gs.wave.waveNumber)
   const result: CardDefinition[] = []
 
+  /** 僅保留「放入對應卡槽後未超過該卡上限」的卡片 */
+  const allowedByLimit = (cards: CardDefinition[]) =>
+    cards.filter(c => {
+      const items = getItemsOfSlotForCard(gs, c)
+      return items != null && canAddCardToItems(items, c)
+    })
+
   if (hasEmptySlot) {
-    // 至少 1 張來自未使用技能
+    // 至少 1 張來自未使用技能（新技能進空槽，一定未達上限）
     const unlockedCards = allCards.filter(c => !lockedSkills.includes(c.skillId))
     const newCard = weightedPick(unlockedCards, weights)
     if (newCard) result.push(newCard)
 
-    // 其餘從所有可用卡片中抽取
-    const remaining = [...allCards]
+    // 其餘從所有可用卡片中抽取，且不得超過各卡上限
+    let remaining = allowedByLimit(allCards)
     while (result.length < 3 && remaining.length > 0) {
       const card = weightedPick(remaining, weights)
       if (!card) break
-      // 避免同 id 重複（同技能但不同卡片 OK）
       if (!result.some(r => r.id === card.id)) {
         result.push(card)
       }
@@ -261,11 +268,10 @@ export function generateCardOffer(
       if (idx >= 0) remaining.splice(idx, 1)
     }
   } else {
-    // 卡槽已滿：只從鎖定的技能抽，且三選一至少有兩種不同技能
-    const uniqueSkills = [...new Set(lockedSkills)]
+    // 卡槽已滿：只從鎖定的技能抽，且不得超過各卡上限
+    const lockedCards = allowedByLimit(allCards.filter(c => lockedSkills.includes(c.skillId)))
+    const uniqueSkills = [...new Set(lockedCards.map(c => c.skillId))]
     if (uniqueSkills.length < 2) {
-      // 只有一種技能時無法滿足「至少一不一樣」，直接抽三張
-      const lockedCards = allCards.filter(c => lockedSkills.includes(c.skillId))
       const remaining = [...lockedCards]
       while (result.length < 3 && remaining.length > 0) {
         const card = weightedPick(remaining, weights)
@@ -275,8 +281,6 @@ export function generateCardOffer(
         if (idx >= 0) remaining.splice(idx, 1)
       }
     } else {
-      // 先確保至少 1 張來自「非主流」技能（與第一張不同的技能）
-      const lockedCards = allCards.filter(c => lockedSkills.includes(c.skillId))
       const first = weightedPick(lockedCards, weights)
       if (first) {
         result.push(first)
@@ -284,7 +288,6 @@ export function generateCardOffer(
         const different = weightedPick(otherSkillCards, weights)
         if (different) result.push(different)
       }
-      // 其餘補滿到 3 張
       const remaining = lockedCards.filter(c => !result.some(r => r.id === c.id))
       while (result.length < 3 && remaining.length > 0) {
         const card = weightedPick(remaining, weights)
@@ -299,8 +302,30 @@ export function generateCardOffer(
   return result
 }
 
-/** 選擇卡片放入卡槽（加入 items 序列尾端） */
+/** 計算該卡在 items 中已出現次數 */
+export function countCardInItems(items: SlotItem[], cardId: string): number {
+  return items.filter((i): i is SlotItem & { kind: 'card' } => i.kind === 'card' && i.card.id === cardId).length
+}
+
+/** 該卡是否還可加入（未達數量上限） */
+export function canAddCardToItems(items: SlotItem[], card: CardDefinition): boolean {
+  return countCardInItems(items, card.id) < getCardMaxCount(card.id)
+}
+
+/** 取得若選擇此卡會放入的卡槽的 items（用於檢查上限） */
+function getItemsOfSlotForCard(gs: InfiniteGameState, card: CardDefinition): SlotItem[] | null {
+  const existing = gs.slots.find(s => s.skillId === card.skillId)
+  if (existing) return existing.items
+  const empty = gs.slots.find(s => s.skillId === null)
+  if (empty) return empty.items
+  return null
+}
+
+/** 選擇卡片放入卡槽（加入 items 序列尾端）；達上限則不加入並回傳 false */
 export function placeCard(gs: InfiniteGameState, card: CardDefinition): boolean {
+  const items = getItemsOfSlotForCard(gs, card)
+  if (!items || !canAddCardToItems(items, card)) return false
+
   const existing = gs.slots.find(s => s.skillId === card.skillId)
   if (existing) {
     existing.items.push({ kind: 'card', card })
@@ -317,19 +342,21 @@ export function placeCard(gs: InfiniteGameState, card: CardDefinition): boolean 
   return false
 }
 
-/** 取得 pickup 類型可套用的技能：cooldown=全部, range=冰箭以外, count=冰箭/火球/光束 */
+/** 取得 pickup 類型可套用的技能：cooldown=全部, range=凍土/火球等, count=冰箭/火球/光束, damage=冰箭等 */
 export function getValidTargetSlotsForPickup(
   gs: InfiniteGameState,
-  type: 'cooldown' | 'range' | 'count',
+  type: 'cooldown' | 'range' | 'count' | 'damage',
 ): number[] {
   const indices: number[] = []
   const RANGE_SKILLS = ['ice-spike', 'fireball', 'electric-ball', 'beam']
   const COUNT_SKILLS = ['ice-arrow', 'fireball', 'electric-ball', 'beam']
+  const DAMAGE_SKILLS = ['ice-arrow']
   gs.slots.forEach((s, i) => {
     if (!s.skillId) return
     if (type === 'cooldown') indices.push(i)
     else if (type === 'range' && RANGE_SKILLS.includes(s.skillId)) indices.push(i)
     else if (type === 'count' && COUNT_SKILLS.includes(s.skillId)) indices.push(i)
+    else if (type === 'damage' && DAMAGE_SKILLS.includes(s.skillId)) indices.push(i)
   })
   return indices
 }

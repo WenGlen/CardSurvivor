@@ -5,14 +5,16 @@
  * 修改此檔即可調整技能平衡，無需改動 cards.ts / GameEngine 邏輯。
  */
 
-/** 冰箭基礎參數 */
+/** 冰箭基礎參數（CardsDetail-ice-v4：數量 4、冷卻 1.2s、觸發失溫 20%） */
 export const ICE_ARROW_BASE = {
-  damage: 12,
+  damage: 20,
   speed: 220,
   cooldown: 1.2,
-  count: 3,
+  count: 4,
   pierceCount: 0,
-  spreadAngle: 30,
+  spreadAngle: 360,
+  /** 基礎觸發失溫機率 0~1 */
+  chillChanceBase: 0.2,
 } as const
 
 /** 凍土基礎參數 */
