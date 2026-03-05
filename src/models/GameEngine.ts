@@ -234,17 +234,26 @@ export class GameEngine {
     }
   }
 
+  /** 取得目前超導磁場最大半徑（0 代表無） */
+  private getMaxSuperconductRadius(): number {
+    let maxRadius = 0
+    for (const orb of this.state.orbitalOrbs) {
+      if (orb.hasSuperconduct && orb.radius > maxRadius) {
+        maxRadius = orb.radius
+      }
+    }
+    return maxRadius
+  }
+
   /** 敵人是否在電球超導磁場內（減速 40%） */
-  private isEnemyInSuperconductZone(enemy: Entity): boolean {
-    const { orbitalOrbs, player } = this.state
-    const maxRadius = Math.max(0, ...orbitalOrbs.filter((o) => o.hasSuperconduct).map((o) => o.radius))
+  private isEnemyInSuperconductZone(enemy: Entity, maxRadius: number): boolean {
+    const { player } = this.state
     if (maxRadius <= 0) return false
     return this.distance(enemy.position, player.position) < maxRadius + enemy.size
   }
 
   /** 敵人是否在任一寒氣區域內（極寒領域減速 30%） */
-  private isEnemyInColdZone(enemy: Entity): boolean {
-    const now = performance.now()
+  private isEnemyInColdZone(enemy: Entity, now: number): boolean {
     for (const cz of this.state.coldZones) {
       if (now - cz.createdAt >= cz.duration) continue
       if (this.distance(enemy.position, cz.position) < cz.radius + enemy.size) {
@@ -258,13 +267,14 @@ export class GameEngine {
   private updateEnemyAI(dt: number) {
     const { player, enemies } = this.state
     const now = performance.now()
+    const maxSuperconductRadius = this.getMaxSuperconductRadius()
     for (const enemy of enemies) {
       if (enemy.hp <= 0) continue
       // 凍結中不移動
       if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) continue
       const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
+      const slowByColdZone = this.isEnemyInColdZone(enemy, now) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy, maxSuperconductRadius) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
       const superconductMul = 1 - slowBySuperconduct
       const slowMul = Math.min(slowByDebuff, slowByColdZone, superconductMul < 1 ? superconductMul : 1)
       const dx = player.position.x - enemy.position.x
@@ -674,14 +684,15 @@ export class GameEngine {
   /** 更新巡邏木樁的左右移動（冰封時暫停） */
   private updateEnemyPatrol(dt: number) {
     const now = performance.now()
+    const maxSuperconductRadius = this.getMaxSuperconductRadius()
     for (const enemy of this.state.enemies) {
       if (!enemy.patrol) continue
       if (enemy.frozenUntil > 0 && now < enemy.frozenUntil) continue
 
       const p = enemy.patrol
       const slowByDebuff = (enemy.slowUntil > 0 && now < enemy.slowUntil) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowByColdZone = this.isEnemyInColdZone(enemy) ? SLOW_MOVE_MULTIPLIER : 1
-      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
+      const slowByColdZone = this.isEnemyInColdZone(enemy, now) ? SLOW_MOVE_MULTIPLIER : 1
+      const slowBySuperconduct = this.isEnemyInSuperconductZone(enemy, maxSuperconductRadius) ? ELECTRIC_BALL_CARD['electric-ball-superconduct'].slowRate : 0
       const superconductMul = 1 - slowBySuperconduct
       const slowMul = Math.min(slowByDebuff, slowByColdZone, superconductMul < 1 ? superconductMul : 1)
       enemy.position.x += p.speed * p.direction * dt * slowMul
